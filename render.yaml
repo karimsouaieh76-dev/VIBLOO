@@ -3,6 +3,7 @@ services:
     name: vibloo
     runtime: node
     plan: free
+    region: frankfurt
     rootDir: server
     buildCommand: npm ci --omit=dev
     startCommand: npm start

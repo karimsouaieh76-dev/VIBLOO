@@ -8,18 +8,31 @@ import { openDb } from "./db/index.js";
 import { hashPassword, verifyPassword, makeTokens } from "./auth.js";
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
-const CHANNEL_RE = /^[a-z0-9_-]{2,32}$/;
-const MAX_MESSAGE = 2000;
+const MAX_MESSAGE = 4000;
+const MAX_GROUP = 256;
 const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
+
+const toId = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+const userRoom = (id) => `u:${id}`;
 
 export async function createServer({ dbFile = "cortile.db", databaseUrl, secret }) {
   if (!secret) throw new Error("JWT secret mancante");
   const db = await openDb({ dbFile, databaseUrl });
   const tokens = makeTokens(secret);
 
+  // userId -> number of open connections
+  const online = new Map();
+  const isOnline = (id) => (online.get(id) ?? 0) > 0;
+
+  // Adds live "online" flags to conversation summaries.
+  const withPresence = (convs) =>
+    convs.map((c) => ({ ...c, members: c.members.map((m) => ({ ...m, online: isOnline(m.id) })) }));
+  const summary = async (userId, conversationId) =>
+    withPresence(await db.conversationsFor(userId, conversationId))[0];
+
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: "16kb" }));
+  app.use(express.json({ limit: "32kb" }));
 
   const requireUser = (req, res, next) => {
     const header = req.get("authorization") || "";
@@ -59,30 +72,58 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
   app.get("/api/me", requireUser, async (req, res) => {
     const user = await db.findUserById(req.user.id);
     if (!user) return res.status(401).json({ error: "Account non trovato." });
-    res.json({ user });
+    res.json({ user: { id: user.id, username: user.username } });
   });
 
-  app.get("/api/channels", requireUser, async (_req, res) => res.json({ channels: await db.listChannels() }));
-
-  app.post("/api/channels", requireUser, async (req, res) => {
-    const name = String(req.body?.name ?? "").trim().toLowerCase().replace(/\s+/g, "-");
-    if (!CHANNEL_RE.test(name)) {
-      return res.status(400).json({ error: "Il nome del canale deve avere 2-32 caratteri: lettere minuscole, numeri, - o _." });
-    }
-    if ((await db.listChannels()).some((c) => c.name === name)) {
-      return res.status(409).json({ error: "Esiste già un canale con questo nome." });
-    }
-    const channel = await db.createChannel(name, req.user.id);
-    io.emit("channel:new", channel);
-    res.status(201).json({ channel });
+  app.get("/api/users", requireUser, async (req, res) => {
+    const q = String(req.query.q ?? "").trim().slice(0, 24);
+    const users = await db.searchUsers(q, req.user.id);
+    res.json({ users: users.map((u) => ({ ...u, online: isOnline(u.id) })) });
   });
 
-  app.get("/api/channels/:id/messages", requireUser, async (req, res) => {
-    const channelId = Number(req.params.id);
-    if (!Number.isInteger(channelId) || !(await db.findChannel(channelId))) return res.status(404).json({ error: "Canale non trovato." });
-    const before = Number.isInteger(Number(req.query.before)) && req.query.before ? Number(req.query.before) : undefined;
+  app.get("/api/conversations", requireUser, async (req, res) => {
+    res.json({ conversations: withPresence(await db.conversationsFor(req.user.id)) });
+  });
+
+  // { userId } opens (or reuses) a private chat; { name, userIds } creates a group.
+  app.post("/api/conversations", requireUser, async (req, res) => {
+    const me = req.user.id;
+    const body = req.body ?? {};
+    let id, created;
+
+    if (body.userId !== undefined) {
+      const other = toId(body.userId);
+      if (!other || other === me || !(await db.findUserById(other))) {
+        return res.status(400).json({ error: "Persona non trovata." });
+      }
+      ({ id, created } = await db.findOrCreateDirect(me, other));
+    } else {
+      const name = String(body.name ?? "").trim();
+      const userIds = Array.isArray(body.userIds) ? [...new Set(body.userIds.map(toId).filter(Boolean))].filter((u) => u !== me) : [];
+      if (!name || name.length > 40) return res.status(400).json({ error: "Dai al gruppo un nome (massimo 40 caratteri)." });
+      if (!userIds.length) return res.status(400).json({ error: "Scegli almeno una persona da aggiungere al gruppo." });
+      if (userIds.length >= MAX_GROUP) return res.status(400).json({ error: `Un gruppo può avere al massimo ${MAX_GROUP} persone.` });
+      for (const u of userIds) {
+        if (!(await db.findUserById(u))) return res.status(400).json({ error: "Una delle persone scelte non esiste più." });
+      }
+      id = await db.createGroup(name, me, userIds);
+      created = true;
+    }
+
+    if (created) {
+      for (const memberId of await db.memberIds(id)) {
+        io.to(userRoom(memberId)).emit("conversation:new", await summary(memberId, id));
+      }
+    }
+    res.status(created ? 201 : 200).json({ conversation: await summary(me, id) });
+  });
+
+  app.get("/api/conversations/:id/messages", requireUser, async (req, res) => {
+    const id = toId(req.params.id);
+    if (!id || !(await db.isMember(id, req.user.id))) return res.status(404).json({ error: "Chat non trovata." });
+    const before = toId(req.query.before) ?? undefined;
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-    res.json({ messages: await db.messages(channelId, before, limit) });
+    res.json({ messages: await db.messages(id, before, limit) });
   });
 
   // The web app (built from ../app with `npm run build:web`) is served from
@@ -92,13 +133,20 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
     app.get(/^\/(?!api\/|socket\.io\/).*/, (_req, res) => res.sendFile("index.html", { root: PUBLIC_DIR }));
   }
 
+  // Unexpected errors (e.g. database unreachable) get a readable message.
+  app.use((err, _req, res, _next) => {
+    console.error(err);
+    res.status(500).json({ error: "Errore del server. Riprova tra poco." });
+  });
+
   const httpServer = createHttpServer(app);
   const io = new Server(httpServer, { cors: { origin: "*" } });
 
-  // userId -> { user, sockets }
-  const online = new Map();
-  const broadcastPresence = () =>
-    io.emit("presence", [...online.values()].map((o) => o.user));
+  const toMembers = async (conversationId, event, payload, exceptUserId) => {
+    for (const id of await db.memberIds(conversationId)) {
+      if (id !== exceptUserId) io.to(userRoom(id)).emit(event, payload);
+    }
+  };
 
   io.use((socket, next) => {
     const user = tokens.verify(socket.handshake.auth?.token);
@@ -109,44 +157,58 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
 
   io.on("connection", (socket) => {
     const user = socket.data.user;
-    const entry = online.get(user.id) ?? { user, sockets: 0 };
-    entry.sockets += 1;
-    online.set(user.id, entry);
-    broadcastPresence();
+    socket.join(userRoom(user.id));
+    online.set(user.id, (online.get(user.id) ?? 0) + 1);
+    if (online.get(user.id) === 1) io.emit("presence", { userId: user.id, online: true, lastSeen: null });
 
-    socket.on("message:send", async (payload, ack = () => {}) => {
-      const channelId = Number(payload?.channelId);
-      const text = typeof payload?.text === "string" ? payload.text.trim() : "";
-      if (!text) return ack({ error: "Il messaggio è vuoto." });
-      if (text.length > MAX_MESSAGE) return ack({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
-      try {
-        if (!Number.isInteger(channelId) || !(await db.findChannel(channelId))) return ack({ error: "Canale non trovato." });
-        const message = await db.addMessage(channelId, user.id, text);
-        io.emit("message:new", message);
-        ack({ message });
-      } catch (err) {
-        console.error(err);
-        ack({ error: "Messaggio non salvato. Riprova." });
-      }
+    const handle = (event, fn) =>
+      socket.on(event, async (payload, ack) => {
+        const reply = typeof ack === "function" ? ack : () => {};
+        try {
+          await fn(payload ?? {}, reply);
+        } catch (err) {
+          console.error(err);
+          reply({ error: "Errore del server. Riprova." });
+        }
+      });
+
+    handle("message:send", async ({ conversationId, text }, reply) => {
+      const id = toId(conversationId);
+      const body = typeof text === "string" ? text.trim() : "";
+      if (!body) return reply({ error: "Il messaggio è vuoto." });
+      if (body.length > MAX_MESSAGE) return reply({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
+      if (!id || !(await db.isMember(id, user.id))) return reply({ error: "Chat non trovata." });
+      const message = await db.addMessage(id, user.id, body);
+      reply({ message });
+      await toMembers(id, "message:new", message);
     });
 
-    socket.on("typing", (payload) => {
-      const channelId = Number(payload?.channelId);
-      if (!channelId) return;
-      socket.broadcast.emit("typing", { channelId, user, typing: Boolean(payload?.typing) });
+    handle("delivered", async ({ conversationId, messageId }) => {
+      const id = toId(conversationId), mid = toId(messageId);
+      if (!id || !mid || !(await db.isMember(id, user.id))) return;
+      await toMembers(id, "receipt", await db.markDelivered(id, user.id, mid));
     });
 
-    socket.on("disconnect", () => {
-      const e = online.get(user.id);
-      if (e && --e.sockets <= 0) online.delete(user.id);
-      broadcastPresence();
+    handle("read", async ({ conversationId, messageId }) => {
+      const id = toId(conversationId), mid = toId(messageId);
+      if (!id || !mid || !(await db.isMember(id, user.id))) return;
+      await toMembers(id, "receipt", await db.markRead(id, user.id, mid));
     });
-  });
 
-  // Unexpected errors (e.g. database unreachable) get a readable message.
-  app.use((err, _req, res, _next) => {
-    console.error(err);
-    res.status(500).json({ error: "Errore del server. Riprova tra poco." });
+    handle("typing", async ({ conversationId, typing }) => {
+      const id = toId(conversationId);
+      if (!id || !(await db.isMember(id, user.id))) return;
+      await toMembers(id, "typing", { conversationId: id, user, typing: Boolean(typing) }, user.id);
+    });
+
+    socket.on("disconnect", async () => {
+      const left = (online.get(user.id) ?? 1) - 1;
+      if (left > 0) return online.set(user.id, left);
+      online.delete(user.id);
+      const lastSeen = Date.now();
+      io.emit("presence", { userId: user.id, online: false, lastSeen });
+      try { await db.touchLastSeen(user.id); } catch (err) { console.error(err); }
+    });
   });
 
   return { app, httpServer, io, db };

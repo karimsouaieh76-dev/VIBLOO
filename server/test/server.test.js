@@ -4,6 +4,7 @@ import { io as connect } from "socket.io-client";
 import { createServer } from "../src/app.js";
 
 let server, base;
+const sockets = [];
 
 before(async () => {
   // TEST_DATABASE_URL runs the same tests against Postgres.
@@ -13,72 +14,124 @@ before(async () => {
 });
 
 after(async () => {
+  sockets.forEach((s) => s.close());
   server.io.close();
   server.httpServer.close();
   await server.db.close();
 });
 
-const post = (path, body, token) =>
-  fetch(base + path, {
-    method: "POST",
+const call = async (method, path, token, body) => {
+  const res = await fetch(base + path, {
+    method,
     headers: { "content-type": "application/json", ...(token && { authorization: `Bearer ${token}` }) },
-    body: JSON.stringify(body),
+    body: body && JSON.stringify(body),
   });
-
-const get = (path, token) => fetch(base + path, { headers: { authorization: `Bearer ${token}` } });
+  return { status: res.status, ...(await res.json()) };
+};
+const register = (username) => call("POST", "/api/register", null, { username, password: "password123" });
+const socketFor = async (token) => {
+  const s = connect(base, { auth: { token }, transports: ["websocket"] });
+  sockets.push(s);
+  await new Promise((r) => s.on("connect", r));
+  return s;
+};
+const next = (socket, event) => new Promise((r) => socket.once(event, r));
 
 test("registrazione, login e validazione", async () => {
-  let res = await post("/api/register", { username: "anna", password: "segreta123" });
-  assert.equal(res.status, 201);
-  res = await post("/api/register", { username: "ANNA", password: "segreta123" });
-  assert.equal(res.status, 409);
-  res = await post("/api/register", { username: "x", password: "segreta123" });
-  assert.equal(res.status, 400);
-  res = await post("/api/login", { username: "anna", password: "sbagliata" });
-  assert.equal(res.status, 401);
-  res = await post("/api/login", { username: "anna", password: "segreta123" });
-  assert.equal(res.status, 200);
-  const { token } = await res.json();
-  res = await get("/api/me", token);
-  assert.equal((await res.json()).user.username, "anna");
-  res = await get("/api/me", "token-falso");
-  assert.equal(res.status, 401);
+  assert.equal((await register("anna")).status, 201);
+  assert.equal((await register("ANNA")).status, 409);
+  assert.equal((await register("x")).status, 400);
+  assert.equal((await call("POST", "/api/login", null, { username: "anna", password: "sbagliata" })).status, 401);
+  const { token } = await call("POST", "/api/login", null, { username: "Anna", password: "password123" });
+  assert.equal((await call("GET", "/api/me", token)).user.username, "anna");
+  assert.equal((await call("GET", "/api/me", "token-falso")).status, 401);
 });
 
-test("canali e messaggi in tempo reale", async () => {
-  const a = await (await post("/api/register", { username: "bruno", password: "password1" })).json();
-  const b = await (await post("/api/register", { username: "carla", password: "password2" })).json();
+test("chat privata: messaggi, spunte, non letti, scrittura e presenza", async () => {
+  const bruno = await register("bruno");
+  const carla = await register("carla");
+  const dario = await register("dario");
 
-  const { channels } = await (await get("/api/channels", a.token)).json();
-  assert.equal(channels[0].name, "generale");
+  const found = await call("GET", "/api/users?q=car", bruno.token);
+  assert.deepEqual(found.users.map((u) => u.username), ["carla"]);
 
-  const created = await post("/api/channels", { name: "Progetti Casa" }, a.token);
-  assert.equal(created.status, 201);
-  assert.equal((await created.json()).channel.name, "progetti-casa");
+  const sb = await socketFor(bruno.token);
+  const carlaOnline = next(sb, "presence");
+  const sc = await socketFor(carla.token);
+  assert.deepEqual(await carlaOnline, { userId: carla.user.id, online: true, lastSeen: null });
 
-  const sa = connect(base, { auth: { token: a.token }, transports: ["websocket"] });
-  const sb = connect(base, { auth: { token: b.token }, transports: ["websocket"] });
-  await Promise.all([sa, sb].map((s) => new Promise((r) => s.on("connect", r))));
+  const newConv = next(sc, "conversation:new");
+  const opened = await call("POST", "/api/conversations", bruno.token, { userId: carla.user.id });
+  assert.equal(opened.status, 201);
+  const conv = opened.conversation;
+  assert.equal(conv.isGroup, false);
+  assert.equal((await newConv).id, conv.id);
 
-  const received = new Promise((r) => sb.on("message:new", r));
-  const ack = await sa.emitWithAck("message:send", { channelId: channels[0].id, text: "  Ciao a tutti!  " });
-  assert.equal(ack.message.text, "Ciao a tutti!");
-  const msg = await received;
-  assert.equal(msg.username, "bruno");
+  // Opening it again reuses the same chat, from either side.
+  const again = await call("POST", "/api/conversations", carla.token, { userId: bruno.user.id });
+  assert.equal(again.status, 200);
+  assert.equal(again.conversation.id, conv.id);
 
-  const empty = await sa.emitWithAck("message:send", { channelId: channels[0].id, text: "   " });
-  assert.ok(empty.error);
-
-  const typing = new Promise((r) => sb.on("typing", r));
-  sa.emit("typing", { channelId: channels[0].id, typing: true });
+  const typing = next(sc, "typing");
+  sb.emit("typing", { conversationId: conv.id, typing: true });
   assert.equal((await typing).user.username, "bruno");
 
-  const history = await (await get(`/api/channels/${channels[0].id}/messages?before=abc`, b.token)).json();
-  assert.equal(history.messages.at(-1).text, "Ciao a tutti!");
+  const incoming = next(sc, "message:new");
+  const ack = await sb.emitWithAck("message:send", { conversationId: conv.id, text: "  Ciao Carla!  " });
+  assert.equal(ack.message.text, "Ciao Carla!");
+  const msg = await incoming;
+  assert.equal(msg.username, "bruno");
 
-  const bad = connect(base, { auth: { token: "nope" }, transports: ["websocket"], reconnection: false });
-  const err = await new Promise((r) => bad.on("connect_error", r));
-  assert.equal(err.message, "unauthorized");
+  let list = await call("GET", "/api/conversations", carla.token);
+  assert.equal(list.conversations[0].unread, 1);
+  assert.equal(list.conversations[0].lastMessage.text, "Ciao Carla!");
+  assert.equal(list.conversations[0].members.find((m) => m.id === bruno.user.id).online, true);
 
-  sa.close(); sb.close(); bad.close();
+  const delivered = next(sb, "receipt");
+  sc.emit("delivered", { conversationId: conv.id, messageId: msg.id });
+  assert.deepEqual(await delivered, { conversationId: conv.id, userId: carla.user.id, lastReadId: 0, lastDeliveredId: msg.id });
+
+  const read = next(sb, "receipt");
+  sc.emit("read", { conversationId: conv.id, messageId: msg.id });
+  assert.equal((await read).lastReadId, msg.id);
+  list = await call("GET", "/api/conversations", carla.token);
+  assert.equal(list.conversations[0].unread, 0);
+
+  // Outsiders can neither read nor write the chat.
+  assert.equal((await call("GET", `/api/conversations/${conv.id}/messages`, dario.token)).status, 404);
+  const sd = await socketFor(dario.token);
+  assert.ok((await sd.emitWithAck("message:send", { conversationId: conv.id, text: "intruso" })).error);
+  assert.ok((await sb.emitWithAck("message:send", { conversationId: conv.id, text: "   " })).error);
+
+  const history = await call("GET", `/api/conversations/${conv.id}/messages?before=abc`, carla.token);
+  assert.deepEqual(history.messages.map((m) => m.text), ["Ciao Carla!"]);
+
+  const offline = next(sb, "presence");
+  sc.close();
+  const p = await offline;
+  assert.equal(p.online, false);
+  assert.ok(p.lastSeen > 0);
+});
+
+test("gruppi", async () => {
+  const e = await register("elena");
+  const f = await register("franco");
+  const g = await register("gina");
+  assert.equal((await call("POST", "/api/conversations", e.token, { name: "Calcetto", userIds: [] })).status, 400);
+  assert.equal((await call("POST", "/api/conversations", e.token, { name: "", userIds: [f.user.id] })).status, 400);
+
+  const sg = await socketFor(g.token);
+  const created = await call("POST", "/api/conversations", e.token, { name: "Calcetto", userIds: [f.user.id, g.user.id] });
+  assert.equal(created.status, 201);
+  assert.equal(created.conversation.isGroup, true);
+  assert.equal(created.conversation.members.length, 3);
+
+  const incoming = next(sg, "message:new");
+  const se = await socketFor(e.token);
+  await se.emitWithAck("message:send", { conversationId: created.conversation.id, text: "Giovedì alle 20?" });
+  assert.equal((await incoming).text, "Giovedì alle 20?");
+
+  const list = await call("GET", "/api/conversations", f.token);
+  assert.equal(list.conversations[0].name, "Calcetto");
+  assert.equal(list.conversations[0].unread, 1);
 });

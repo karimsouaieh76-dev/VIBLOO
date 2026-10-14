@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { ApiError, Channel, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
+import { ApiError, Conversation, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
 import { getItem, removeItem, setItem } from "./src/storage";
 import { useTheme } from "./src/theme";
-import { useChat } from "./src/useChat";
+import { useMessenger } from "./src/useMessenger";
 import { LoginScreen } from "./src/screens/LoginScreen";
-import { ChannelsScreen } from "./src/screens/ChannelsScreen";
+import { ChatsScreen } from "./src/screens/ChatsScreen";
+import { NewChatScreen } from "./src/screens/NewChatScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
 
 type Session = { serverUrl: string; token: string; user: User };
@@ -64,11 +65,30 @@ export default function App() {
   );
 }
 
+type Screen = { name: "chats" } | { name: "new" } | { name: "chat"; conversation: Conversation };
+
 function SignedIn({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const api = useMemo(() => createApi(session.serverUrl, session.token), [session]);
-  const chat = useChat(session.serverUrl, session.token, api);
-  const [open, setOpen] = useState<Channel | null>(null);
+  const messenger = useMessenger(session.serverUrl, session.token, session.user, api);
+  const [screen, setScreen] = useState<Screen>({ name: "chats" });
+  const home = useCallback(() => setScreen({ name: "chats" }), []);
 
-  if (open) return <ChatScreen me={session.user} chat={chat} channel={open} onBack={() => setOpen(null)} />;
-  return <ChannelsScreen me={session.user} chat={chat} onOpen={setOpen} onLogout={onLogout} />;
+  if (screen.name === "chat") {
+    return <ChatScreen me={session.user} messenger={messenger} conversation={screen.conversation} onBack={home} />;
+  }
+  if (screen.name === "new") {
+    return (
+      <NewChatScreen
+        api={api} onBack={home}
+        onOpened={(conversation) => { messenger.addConversation(conversation); setScreen({ name: "chat", conversation }); }}
+      />
+    );
+  }
+  return (
+    <ChatsScreen
+      me={session.user} messenger={messenger} onLogout={onLogout}
+      onOpen={(conversation) => setScreen({ name: "chat", conversation })}
+      onNewChat={() => setScreen({ name: "new" })}
+    />
+  );
 }

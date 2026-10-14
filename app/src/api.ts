@@ -1,14 +1,24 @@
 import { Platform } from "react-native";
 
 export type User = { id: number; username: string };
-export type Channel = { id: number; name: string; createdAt: number };
+export type Person = User & { online: boolean; lastSeen: number | null };
+export type Member = Person & { lastReadId: number; lastDeliveredId: number };
 export type Message = {
   id: number;
-  channelId: number;
-  text: string;
-  createdAt: number;
+  conversationId: number;
   userId: number;
   username: string;
+  text: string;
+  createdAt: number;
+};
+export type Conversation = {
+  id: number;
+  isGroup: boolean;
+  name: string | null;
+  members: Member[];
+  lastMessage: Message | null;
+  unread: number;
+  updatedAt: number;
 };
 
 // On the web the app is served by the chat server itself, so it talks to the
@@ -39,24 +49,28 @@ export function createApi(baseUrl: string, token?: string) {
         },
       });
     } catch {
-      throw new ApiError(`Server non raggiungibile su ${root}. Controlla l'indirizzo e che il server sia acceso.`, 0);
+      throw new ApiError(`Server non raggiungibile su ${root}. Controlla la connessione.`, 0);
     }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(body.error ?? `Errore del server (${res.status}).`, res.status);
     return body as T;
   }
 
+  const post = <T>(path: string, data: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(data) });
+
   return {
     register: (username: string, password: string) =>
-      request<{ token: string; user: User }>("/api/register", { method: "POST", body: JSON.stringify({ username, password }) }),
+      post<{ token: string; user: User }>("/api/register", { username, password }),
     login: (username: string, password: string) =>
-      request<{ token: string; user: User }>("/api/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+      post<{ token: string; user: User }>("/api/login", { username, password }),
     me: () => request<{ user: User }>("/api/me"),
-    channels: () => request<{ channels: Channel[] }>("/api/channels"),
-    createChannel: (name: string) =>
-      request<{ channel: Channel }>("/api/channels", { method: "POST", body: JSON.stringify({ name }) }),
-    messages: (channelId: number, before?: number) =>
-      request<{ messages: Message[] }>(`/api/channels/${channelId}/messages${before ? `?before=${before}` : ""}`),
+    searchUsers: (q: string) => request<{ users: Person[] }>(`/api/users?q=${encodeURIComponent(q)}`),
+    conversations: () => request<{ conversations: Conversation[] }>("/api/conversations"),
+    openDirect: (userId: number) => post<{ conversation: Conversation }>("/api/conversations", { userId }),
+    createGroup: (name: string, userIds: number[]) =>
+      post<{ conversation: Conversation }>("/api/conversations", { name, userIds }),
+    messages: (conversationId: number, before?: number) =>
+      request<{ messages: Message[] }>(`/api/conversations/${conversationId}/messages${before ? `?before=${before}` : ""}`),
   };
 }
 

@@ -1,6 +1,12 @@
 # Cortile
 
-App di messaggistica di gruppo: canali, messaggi in tempo reale, utenti online e indicatore "sta scrivendo".
+App di messaggistica istantanea, in stile WhatsApp:
+
+- chat private 1 a 1 (cerchi una persona per nome utente) e gruppi;
+- elenco chat ordinato per attività, con anteprima dell'ultimo messaggio e contatore dei non letti;
+- spunte ✓ inviato, ✓✓ consegnato, ✓✓ blu letto;
+- "online", "ultimo accesso alle…" e "sta scrivendo…";
+- messaggi mostrati subito con l'orologio e, se la rete cade, pulsante "Riprova".
 
 - `server/` — Node.js (Express + Socket.IO), database SQLite in locale o Postgres online, account con password (scrypt) e token JWT.
 - `app/` — app mobile Expo (React Native) per iOS e Android, funziona anche nel browser.
@@ -72,23 +78,23 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 ## Test
 
 ```bash
-cd server && npm test        # registrazione, login, canali, messaggi e typing via Socket.IO
+cd server && npm test        # account, chat private, gruppi, spunte, presenza (TEST_DATABASE_URL=… per Postgres)
 cd app && npm run typecheck
 ```
 
 ## API
 
-| Metodo | Percorso                             | Descrizione                    |
-|--------|--------------------------------------|--------------------------------|
-| POST   | `/api/register`                      | `{username, password}` → token |
-| POST   | `/api/login`                         | `{username, password}` → token |
-| GET    | `/api/me`                            | utente corrente                |
-| GET    | `/api/channels`                      | elenco canali                  |
-| POST   | `/api/channels`                      | `{name}` crea un canale        |
-| GET    | `/api/channels/:id/messages?before=` | ultimi 50 messaggi (paginati)  |
+| Metodo | Percorso                                  | Descrizione                                   |
+|--------|-------------------------------------------|-----------------------------------------------|
+| POST   | `/api/register`, `/api/login`             | `{username, password}` → `{token, user}`      |
+| GET    | `/api/me`                                 | utente corrente                               |
+| GET    | `/api/users?q=`                           | cerca persone per nome utente                 |
+| GET    | `/api/conversations`                      | le mie chat, con membri, ultimo messaggio e non letti |
+| POST   | `/api/conversations`                      | `{userId}` chat privata, `{name, userIds}` gruppo |
+| GET    | `/api/conversations/:id/messages?before=` | 50 messaggi alla volta                        |
 
-Socket.IO (token in `auth.token`): `message:send` (con ack) e `typing`; il server invia `message:new`,
-`channel:new`, `typing` e `presence`.
+Socket.IO (token in `auth.token`). Il client invia `message:send` (con ack), `delivered`, `read`
+e `typing`; il server invia `message:new`, `conversation:new`, `receipt`, `typing` e `presence`.
 
 ## Pubblicare sugli store
 

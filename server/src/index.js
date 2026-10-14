@@ -1,17 +1,39 @@
+import { networkInterfaces } from "node:os";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import qrcode from "qrcode-terminal";
 import { createServer } from "./app.js";
 
 const PORT = Number(process.env.PORT) || 3000;
-let secret = process.env.JWT_SECRET;
-if (!secret) {
-  if (process.env.NODE_ENV === "production") {
-    console.error("Imposta JWT_SECRET prima di avviare il server in produzione.");
-    process.exit(1);
-  }
-  secret = "cortile-dev-secret";
-  console.warn("JWT_SECRET non impostato: uso una chiave di sviluppo. Non usarla in produzione.");
+const DB_FILE = process.env.DB_FILE || "cortile.db";
+
+// Without JWT_SECRET, generate one on first start and keep it next to the
+// database, so people stay logged in across restarts.
+function loadSecret() {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  const file = `${DB_FILE}.secret`;
+  if (existsSync(file)) return readFileSync(file, "utf8").trim();
+  const secret = randomBytes(32).toString("hex");
+  writeFileSync(file, secret, { mode: 0o600 });
+  return secret;
 }
 
-const { httpServer } = createServer({ dbFile: process.env.DB_FILE || "cortile.db", secret });
+function lanAddresses() {
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((i) => i && i.family === "IPv4" && !i.internal)
+    .map((i) => `http://${i.address}:${PORT}`);
+}
+
+const { httpServer } = createServer({ dbFile: DB_FILE, secret: loadSecret() });
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Cortile server in ascolto su http://0.0.0.0:${PORT}`);
+  const lan = lanAddresses();
+  console.log("\n  Cortile è acceso.\n");
+  console.log(`  Su questo computer:  http://localhost:${PORT}`);
+  for (const url of lan) console.log(`  Sul telefono:        ${url}`);
+  if (lan.length) {
+    console.log("\n  Inquadra il codice con la fotocamera del telefono (stessa rete Wi-Fi):\n");
+    qrcode.generate(lan[0], { small: true }, (qr) => console.log(qr.replace(/^/gm, "  ")));
+  }
+  console.log("  Per spegnerlo chiudi questa finestra o premi Ctrl+C.\n");
 });

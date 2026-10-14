@@ -1,4 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import { Server } from "socket.io";
@@ -8,6 +10,7 @@ import { hashPassword, verifyPassword, makeTokens } from "./auth.js";
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
 const CHANNEL_RE = /^[a-z0-9_-]{2,32}$/;
 const MAX_MESSAGE = 2000;
+const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 
 export function createServer({ dbFile = "cortile.db", secret }) {
   if (!secret) throw new Error("JWT secret mancante");
@@ -81,6 +84,13 @@ export function createServer({ dbFile = "cortile.db", secret }) {
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
     res.json({ messages: db.messages(channelId, before, limit) });
   });
+
+  // The web app (built from ../app with `npm run build:web`) is served from
+  // the same address, so phones only need to open this server's link.
+  if (existsSync(PUBLIC_DIR)) {
+    app.use(express.static(PUBLIC_DIR));
+    app.get(/^\/(?!api\/|socket\.io\/).*/, (_req, res) => res.sendFile("index.html", { root: PUBLIC_DIR }));
+  }
 
   const httpServer = createHttpServer(app);
   const io = new Server(httpServer, { cors: { origin: "*" } });

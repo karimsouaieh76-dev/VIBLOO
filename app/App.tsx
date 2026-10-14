@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { ApiError, Channel, createApi, DEFAULT_SERVER_URL, User } from "./src/api";
+import { ApiError, Channel, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
 import { getItem, removeItem, setItem } from "./src/storage";
 import { useTheme } from "./src/theme";
 import { useChat } from "./src/useChat";
@@ -20,7 +20,7 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const url = (await getItem("serverUrl")) ?? DEFAULT_SERVER_URL;
+      const url = SAME_ORIGIN ? DEFAULT_SERVER_URL : (await getItem("serverUrl")) ?? DEFAULT_SERVER_URL;
       setServerUrl(url);
       const token = await getItem("token");
       if (token) {

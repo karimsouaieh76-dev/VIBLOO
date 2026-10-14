@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { createApi, User } from "../api";
+import { createApi, SAME_ORIGIN, User } from "../api";
 import { Theme, useTheme } from "../theme";
 
 type Props = {
@@ -64,11 +64,15 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
           placeholder={mode === "register" ? "almeno 8 caratteri" : ""} placeholderTextColor={t.muted}
           onSubmitEditing={submit}
         />
-        <Text style={s.label}>Indirizzo del server</Text>
-        <TextInput
-          style={[s.input, s.mono]} value={serverUrl} onChangeText={setServerUrl}
-          autoCapitalize="none" autoCorrect={false} keyboardType="url"
-        />
+        {!SAME_ORIGIN && (
+          <>
+            <Text style={s.label}>Indirizzo del server</Text>
+            <TextInput
+              style={[s.input, s.mono]} value={serverUrl} onChangeText={setServerUrl}
+              autoCapitalize="none" autoCorrect={false} keyboardType="url"
+            />
+          </>
+        )}
 
         {error ? <Text style={s.error}>{error}</Text> : null}
 

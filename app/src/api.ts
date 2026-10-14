@@ -1,3 +1,5 @@
+import { Platform } from "react-native";
+
 export type User = { id: number; username: string };
 export type Channel = { id: number; name: string; createdAt: number };
 export type Message = {
@@ -9,7 +11,12 @@ export type Message = {
   username: string;
 };
 
-export const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL ?? "http://localhost:3000";
+// On the web the app is served by the chat server itself, so it talks to the
+// same address it was opened from.
+export const SAME_ORIGIN = Platform.OS === "web" && !process.env.EXPO_PUBLIC_SERVER_URL;
+export const DEFAULT_SERVER_URL = SAME_ORIGIN
+  ? globalThis.location.origin
+  : process.env.EXPO_PUBLIC_SERVER_URL ?? "http://localhost:3000";
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {

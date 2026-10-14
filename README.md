@@ -6,7 +6,17 @@ App di messaggistica istantanea, in stile WhatsApp:
 - elenco chat ordinato per attività, con anteprima dell'ultimo messaggio e contatore dei non letti;
 - spunte ✓ inviato, ✓✓ consegnato, ✓✓ blu letto;
 - "online", "ultimo accesso alle…" e "sta scrivendo…";
-- messaggi mostrati subito con l'orologio e, se la rete cade, pulsante "Riprova".
+- messaggi mostrati subito con l'orologio e, se la rete cade, pulsante "Riprova";
+- **foto** (ridotte automaticamente), **messaggi vocali** e **file** fino a 15 MB;
+- **modifica** (entro 24 ore) ed **eliminazione per tutti**: tieni premuto un tuo messaggio;
+- **notifiche push** quando l'app è chiusa o in secondo piano.
+
+### Notifiche
+
+Alla prima apertura Cortile mostra "Attiva le notifiche". Funzionano su Android, sui computer e
+su iPhone/iPad (iOS 16.4 o successivo) **solo dopo** aver aggiunto Cortile alla schermata Home.
+Le notifiche richiedono un indirizzo `https://`, quindi funzionano con la versione online
+(Render), non con quella sulla rete di casa (`http://192.168…`).
 
 - `server/` — Node.js (Express + Socket.IO), database SQLite in locale o Postgres online, account con password (scrypt) e token JWT.
 - `app/` — app mobile Expo (React Native) per iOS e Android, funziona anche nel browser.
@@ -47,6 +57,8 @@ Mandalo a chi vuoi: lo apre dal telefono e sceglie "Aggiungi a schermata Home".
 
 Nel piano gratuito di Render il server si addormenta dopo 15 minuti senza visite: la prima
 apertura successiva impiega circa un minuto. I messaggi non si perdono, perché stanno su Neon.
+Anche foto, vocali e file sono salvati su Neon: il piano gratuito ha 0,5 GB, cioè qualche
+migliaio di foto.
 Ogni modifica caricata su GitHub viene pubblicata da sola.
 
 `Dockerfile` serve se preferisci un altro servizio (Railway, Fly.io, una VPS).
@@ -74,11 +86,12 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | `DATABASE_URL` | —             | Postgres (es. Neon); se manca usa il file SQLite |
 | `DB_FILE`    | `cortile.db`    | file SQLite                                |
 | `JWT_SECRET` | generata        | se manca viene creata e salvata accanto al database |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
 
 ## Test
 
 ```bash
-cd server && npm test        # account, chat private, gruppi, spunte, presenza (TEST_DATABASE_URL=… per Postgres)
+cd server && npm test        # account, chat, gruppi, spunte, allegati, modifica/eliminazione, push (TEST_DATABASE_URL=… per Postgres)
 cd app && npm run typecheck
 ```
 
@@ -92,9 +105,13 @@ cd app && npm run typecheck
 | GET    | `/api/conversations`                      | le mie chat, con membri, ultimo messaggio e non letti |
 | POST   | `/api/conversations`                      | `{userId}` chat privata, `{name, userIds}` gruppo |
 | GET    | `/api/conversations/:id/messages?before=` | 50 messaggi alla volta                        |
+| POST   | `/api/conversations/:id/attachments`      | carica un file (corpo grezzo, `x-file-name`)  |
+| GET    | `/api/attachments/:id?token=`             | scarica un file (con supporto `Range`)        |
+| GET/POST | `/api/push/key`, `/api/push/subscribe`, `/api/push/unsubscribe` | notifiche push |
 
-Socket.IO (token in `auth.token`). Il client invia `message:send` (con ack), `delivered`, `read`
-e `typing`; il server invia `message:new`, `conversation:new`, `receipt`, `typing` e `presence`.
+Socket.IO (token in `auth.token`). Il client invia `message:send`, `message:edit`, `message:delete`
+(con ack), `delivered`, `read`, `typing` e `visibility`; il server invia `message:new`,
+`message:update`, `conversation:new`, `receipt`, `typing` e `presence`.
 
 ## Pubblicare sugli store
 

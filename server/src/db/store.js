@@ -1,13 +1,34 @@
 // Every query the server needs, written once for both SQLite and Postgres.
 
-const MESSAGE_COLUMNS = `
-  m.id, m.conversation_id AS "conversationId", m.user_id AS "userId",
-  u.username, m.text, m.created_at AS "createdAt"`;
+const MESSAGE_SELECT = `
+  SELECT m.id, m.conversation_id AS "conversationId", m.user_id AS "userId", u.username,
+         m.kind, m.text, m.created_at AS "createdAt", m.edited_at AS "editedAt", m.deleted_at AS "deletedAt",
+         a.id AS "attId", a.mime AS "attMime", a.name AS "attName", a.size AS "attSize",
+         a.width AS "attWidth", a.height AS "attHeight", a.duration AS "attDuration"
+  FROM chat_messages m
+  JOIN users u ON u.id = m.user_id
+  LEFT JOIN attachments a ON a.id = m.attachment_id`;
+
+// Flat SQL row -> message object with a nested attachment.
+function toMessage(r) {
+  if (!r) return r;
+  const { attId, attMime, attName, attSize, attWidth, attHeight, attDuration, ...m } = r;
+  return {
+    ...m,
+    attachment: attId
+      ? { id: attId, mime: attMime, name: attName, size: attSize, width: attWidth, height: attHeight, duration: attDuration }
+      : null,
+  };
+}
+
+export const kindFor = (mime) =>
+  mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : "file";
 
 export async function createStore(driver) {
   const { query, exec } = driver;
   const one = async (sql, params) => (await query(sql, params))[0];
   const pk = driver.dialect === "postgres" ? "SERIAL PRIMARY KEY" : "INTEGER PRIMARY KEY";
+  const blob = driver.dialect === "postgres" ? "BYTEA" : "BLOB";
 
   await exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -45,9 +66,47 @@ export async function createStore(driver) {
       created_at      BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_messages_by_conversation ON chat_messages (conversation_id, id);
+
+    -- Photos, voice notes and files live in the database too, so a free host
+    -- without a persistent disk keeps them.
+    CREATE TABLE IF NOT EXISTS attachments (
+      id              ${pk},
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id),
+      mime            TEXT NOT NULL,
+      name            TEXT NOT NULL,
+      size            INTEGER NOT NULL,
+      width           INTEGER,
+      height          INTEGER,
+      duration        INTEGER,
+      data            ${blob} NOT NULL,
+      created_at      BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint   TEXT PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      p256dh     TEXT NOT NULL,
+      auth       TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS push_by_user ON push_subscriptions (user_id);
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
-  // Added after the first release; older databases get the column here.
-  try { await exec("ALTER TABLE users ADD COLUMN last_seen BIGINT"); } catch { /* already there */ }
+  // Columns added after the first release; older databases get them here.
+  for (const column of [
+    "users ADD COLUMN last_seen BIGINT",
+    "chat_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+    "chat_messages ADD COLUMN attachment_id INTEGER REFERENCES attachments(id) ON DELETE SET NULL",
+    "chat_messages ADD COLUMN edited_at BIGINT",
+    "chat_messages ADD COLUMN deleted_at BIGINT",
+  ]) {
+    try { await exec(`ALTER TABLE ${column}`); } catch { /* already there */ }
+  }
 
   const store = {
     close: driver.close,
@@ -68,6 +127,10 @@ export async function createStore(driver) {
     isMember: async (conversationId, userId) =>
       Boolean(await one("SELECT 1 AS ok FROM conversation_members WHERE conversation_id = ? AND user_id = ?",
         [conversationId, userId])),
+    conversationMeta: async (id) => {
+      const r = await one("SELECT is_group AS \"isGroup\", name FROM conversations WHERE id = ?", [id]);
+      return r && { isGroup: Boolean(r.isGroup), name: r.name };
+    },
     memberIds: async (conversationId) =>
       (await query("SELECT user_id AS id FROM conversation_members WHERE conversation_id = ?", [conversationId]))
         .map((r) => r.id),
@@ -115,13 +178,14 @@ export async function createStore(driver) {
                 cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId"
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id
          WHERE cm.conversation_id IN (${inList})`, ids);
-      const last = await query(
-        `SELECT ${MESSAGE_COLUMNS} FROM chat_messages m JOIN users u ON u.id = m.user_id
-         WHERE m.id IN (SELECT max(id) FROM chat_messages WHERE conversation_id IN (${inList}) GROUP BY conversation_id)`, ids);
+      const last = (await query(
+        `${MESSAGE_SELECT}
+         WHERE m.id IN (SELECT max(id) FROM chat_messages WHERE conversation_id IN (${inList}) GROUP BY conversation_id)`, ids))
+        .map(toMessage);
       const unread = await query(
         `SELECT m.conversation_id AS "conversationId", count(*) AS n
          FROM chat_messages m JOIN conversation_members me ON me.conversation_id = m.conversation_id AND me.user_id = ?
-         WHERE m.conversation_id IN (${inList}) AND m.id > me.last_read_id AND m.user_id <> ?
+         WHERE m.conversation_id IN (${inList}) AND m.id > me.last_read_id AND m.user_id <> ? AND m.deleted_at IS NULL
          GROUP BY m.conversation_id`, [userId, ...ids, userId]);
 
       return convs.map((c) => {
@@ -139,21 +203,73 @@ export async function createStore(driver) {
     },
 
     // ---------- messages ----------
-    async addMessage(conversationId, userId, text) {
-      const { id } = await one("INSERT INTO chat_messages (conversation_id, user_id, text, created_at) VALUES (?, ?, ?, ?) RETURNING id",
-        [conversationId, userId, text, Date.now()]);
+    async addMessage(conversationId, userId, text, attachment = null) {
+      const { id } = await one(
+        `INSERT INTO chat_messages (conversation_id, user_id, kind, text, attachment_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+        [conversationId, userId, attachment ? kindFor(attachment.mime) : "text", text, attachment?.id ?? null, Date.now()]);
       // The sender has obviously read everything up to their own message.
       await store.markRead(conversationId, userId, id);
-      return one(`SELECT ${MESSAGE_COLUMNS} FROM chat_messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?`, [id]);
+      return store.getMessage(id);
     },
+    getMessage: async (id) => toMessage(await one(`${MESSAGE_SELECT} WHERE m.id = ?`, [id])),
 
     // Newest first from the DB, returned oldest first for display.
     async messages(conversationId, before = 2147483647, limit = 50) {
-      const rows = await query(
-        `SELECT ${MESSAGE_COLUMNS} FROM chat_messages m JOIN users u ON u.id = m.user_id
-         WHERE m.conversation_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`, [conversationId, before, limit]);
-      return rows.reverse();
+      const rows = await query(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`,
+        [conversationId, before, limit]);
+      return rows.reverse().map(toMessage);
     },
+
+    async editMessage(id, text) {
+      await query("UPDATE chat_messages SET text = ?, edited_at = ? WHERE id = ?", [text, Date.now(), id]);
+      return store.getMessage(id);
+    },
+
+    // "Deleted for everyone": keep a placeholder, drop the text and the file.
+    async deleteMessage(id) {
+      const row = await one("SELECT attachment_id AS \"attachmentId\" FROM chat_messages WHERE id = ?", [id]);
+      await query("UPDATE chat_messages SET text = '', attachment_id = NULL, deleted_at = ? WHERE id = ?", [Date.now(), id]);
+      if (row?.attachmentId) await query("DELETE FROM attachments WHERE id = ?", [row.attachmentId]);
+      return store.getMessage(id);
+    },
+
+    // ---------- attachments ----------
+    async createAttachment({ conversationId, userId, mime, name, data, width, height, duration }) {
+      const { id } = await one(
+        `INSERT INTO attachments (conversation_id, user_id, mime, name, size, width, height, duration, data, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        [conversationId, userId, mime, name, data.length, width ?? null, height ?? null, duration ?? null, data, Date.now()]);
+      return { id, mime, name, size: data.length, width: width ?? null, height: height ?? null, duration: duration ?? null };
+    },
+    // Metadata only, to check who may use it.
+    attachmentInfo: (id) =>
+      one(`SELECT a.id, a.conversation_id AS "conversationId", a.user_id AS "userId", a.mime, a.name,
+                  (SELECT count(*) FROM chat_messages m WHERE m.attachment_id = a.id) AS used
+           FROM attachments a WHERE a.id = ?`, [id]),
+    attachmentData: async (id) => {
+      const r = await one(`SELECT conversation_id AS "conversationId", mime, name, size, data FROM attachments WHERE id = ?`, [id]);
+      return r && { ...r, data: Buffer.from(r.data) };
+    },
+
+    // ---------- push notifications ----------
+    async savePushSubscription(userId, { endpoint, keys }) {
+      await query(
+        `INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+        [endpoint, userId, keys.p256dh, keys.auth, Date.now()]);
+    },
+    deletePushSubscription: (endpoint) => query("DELETE FROM push_subscriptions WHERE endpoint = ?", [endpoint]),
+    pushSubscriptionsFor: async (userIds) => {
+      if (!userIds.length) return [];
+      return query(`SELECT endpoint, user_id AS "userId", p256dh, auth FROM push_subscriptions
+                    WHERE user_id IN (${userIds.map(() => "?").join(",")})`, userIds);
+    },
+
+    // ---------- settings ----------
+    getSetting: async (key) => (await one("SELECT value FROM settings WHERE key = ?", [key]))?.value ?? null,
+    setSetting: (key, value) =>
+      query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [key, value]),
 
     // Receipts only move forward. Returns the member's receipt row.
     async markDelivered(conversationId, userId, messageId) {

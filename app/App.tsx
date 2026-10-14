@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Platform, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ApiError, Conversation, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
 import { getItem, removeItem, setItem } from "./src/storage";
+import { disablePush, registerServiceWorker, syncPush } from "./src/push";
 import { useTheme } from "./src/theme";
 import { useMessenger } from "./src/useMessenger";
 import { LoginScreen } from "./src/screens/LoginScreen";
@@ -20,6 +21,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
 
   useEffect(() => {
+    registerServiceWorker();
     (async () => {
       const url = SAME_ORIGIN ? DEFAULT_SERVER_URL : (await getItem("serverUrl")) ?? DEFAULT_SERVER_URL;
       setServerUrl(url);
@@ -45,6 +47,7 @@ export default function App() {
   }
 
   async function logout() {
+    if (session) await disablePush(createApi(session.serverUrl, session.token)).catch(() => {});
     await removeItem("token");
     setSession(null);
   }
@@ -65,6 +68,13 @@ export default function App() {
   );
 }
 
+function initialChatFromUrl(): number | null {
+  if (Platform.OS !== "web") return null;
+  const id = Number(new URLSearchParams(window.location.search).get("chat"));
+  if (id) window.history.replaceState(null, "", "/");
+  return id || null;
+}
+
 type Screen = { name: "chats" } | { name: "new" } | { name: "chat"; conversation: Conversation };
 
 function SignedIn({ session, onLogout }: { session: Session; onLogout: () => void }) {
@@ -72,9 +82,29 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
   const messenger = useMessenger(session.serverUrl, session.token, session.user, api);
   const [screen, setScreen] = useState<Screen>({ name: "chats" });
   const home = useCallback(() => setScreen({ name: "chats" }), []);
+  const [wanted, setWanted] = useState<number | null>(initialChatFromUrl);
+
+  // Keep this device's push subscription known to the server.
+  useEffect(() => { syncPush(api).catch(() => {}); }, [api]);
+
+  // A tapped notification asks for a chat, via the URL or the service worker.
+  useEffect(() => {
+    if (Platform.OS !== "web" || !("serviceWorker" in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === "open-chat" && e.data.conversationId) setWanted(Number(e.data.conversationId));
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
+  useEffect(() => {
+    if (wanted == null || !messenger.loaded) return;
+    const conversation = messenger.conversations.find((c) => c.id === wanted);
+    if (conversation) setScreen({ name: "chat", conversation });
+    setWanted(null);
+  }, [wanted, messenger.loaded, messenger.conversations]);
 
   if (screen.name === "chat") {
-    return <ChatScreen me={session.user} messenger={messenger} conversation={screen.conversation} onBack={home} />;
+    return <ChatScreen me={session.user} api={api} messenger={messenger} conversation={screen.conversation} onBack={home} />;
   }
   if (screen.name === "new") {
     return (
@@ -86,7 +116,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
   }
   return (
     <ChatsScreen
-      me={session.user} messenger={messenger} onLogout={onLogout}
+      me={session.user} api={api} messenger={messenger} onLogout={onLogout}
       onOpen={(conversation) => setScreen({ name: "chat", conversation })}
       onNewChat={() => setScreen({ name: "new" })}
     />

@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform, Vibration } from "react-native";
 import { io, Socket } from "socket.io-client";
-import type { Api, Conversation, Message, User } from "./api";
+import type { Api, Conversation, LocalFile, Message, MessageKind, User } from "./api";
 
-export type ChatMessage = Message & { local?: "pending" | "failed" };
+// Messages not yet saved by the server carry their state and, for media, the
+// local file (shown as a preview and kept for "Riprova").
+export type ChatMessage = Message & { local?: "pending" | "failed"; localFile?: LocalFile };
+export type Outgoing = { text: string; file?: LocalFile };
+
+const kindOf = (mime: string): MessageKind =>
+  mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : "file";
 type Typing = Record<number, Record<number, string>>; // conversationId -> userId -> username
 type Receipt = { conversationId: number; userId: number; lastReadId: number; lastDeliveredId: number };
 type Presence = { userId: number; online: boolean; lastSeen: number | null };
@@ -66,6 +72,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
 
     socket.on("connect", async () => {
       setConnected(true);
+      socket.emit("visibility", { visible: appVisible() });
       const list = await refreshConversations().catch(() => null);
       // Catch up on whatever arrived in the open chat while offline.
       const open = active.current;
@@ -111,6 +118,16 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
       }
     });
 
+    // Edited or deleted messages.
+    socket.on("message:update", (m: Message) => {
+      setMessages((prev) => {
+        const list = prev[m.conversationId];
+        return list ? { ...prev, [m.conversationId]: list.map((x) => (x.id === m.id ? m : x)) } : prev;
+      });
+      setConversations((list) => list.map((c) =>
+        c.id === m.conversationId && c.lastMessage?.id === m.id ? { ...c, lastMessage: m } : c));
+    });
+
     socket.on("receipt", (r: Receipt) =>
       setConversations((list) => list.map((c) => c.id !== r.conversationId ? c : {
         ...c,
@@ -142,6 +159,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   // Opening a chat (or coming back to the app) reads its messages.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
+      emit("visibility", { visible: state === "active" });
       const open = active.current;
       if (state !== "active" || !open) return;
       const last = messages[open]?.filter((m) => !m.local).at(-1);
@@ -167,38 +185,65 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     return older.length;
   }, [api, messages]);
 
-  // Shows the message straight away with a clock, then swaps in the saved one.
-  const send = useCallback(async (conversationId: number, text: string, retryId?: number) => {
-    const tempId = retryId ?? tempIds--;
-    const draft: ChatMessage = {
-      id: tempId, conversationId, userId: me.id, username: me.username, text, createdAt: Date.now(), local: "pending",
-    };
+  const replaceMessage = (conversationId: number, id: number, next: ChatMessage | null) =>
     setMessages((prev) => {
-      const list = (prev[conversationId] ?? []).filter((m) => m.id !== tempId);
-      return { ...prev, [conversationId]: [...list, draft] };
+      const list = prev[conversationId] ?? [];
+      if (!next) return { ...prev, [conversationId]: list.filter((m) => m.id !== id) };
+      const rest = list.filter((m) => m.id !== id && m.id !== next.id);
+      // Saved messages go before the ones still sending, in server order.
+      return { ...prev, [conversationId]: [...rest.filter((m) => !m.local), next, ...rest.filter((m) => m.local)] };
     });
-    const fail = () => setMessages((prev) => ({
-      ...prev,
-      [conversationId]: (prev[conversationId] ?? []).map((m) => (m.id === tempId ? { ...m, local: "failed" } : m)),
-    }));
+
+  // Shows the message straight away with a clock, uploads any file, then
+  // swaps in the saved message. On failure the bubble offers "Riprova".
+  const send = useCallback(async (conversationId: number, out: Outgoing, retryId?: number) => {
+    const tempId = retryId ?? tempIds--;
+    const file = out.file;
+    const draft: ChatMessage = {
+      id: tempId, conversationId, userId: me.id, username: me.username, text: out.text, createdAt: Date.now(),
+      kind: file ? kindOf(file.mime) : "text", editedAt: null, deletedAt: null, local: "pending", localFile: file,
+      attachment: file ? {
+        id: 0, mime: file.mime, name: file.name, size: 0,
+        width: file.width ?? null, height: file.height ?? null, duration: file.duration ?? null,
+      } : null,
+    };
+    replaceMessage(conversationId, tempId, draft);
+    const fail = () => replaceMessage(conversationId, tempId, { ...draft, local: "failed" });
+
     const socket = socketRef.current;
     if (!socket?.connected) return fail();
     try {
-      const res = await socket.timeout(10000).emitWithAck("message:send", { conversationId, text });
+      const attachmentId = file ? (await api.upload(conversationId, file)).attachment.id : undefined;
+      const res = await socket.timeout(15000).emitWithAck("message:send", { conversationId, text: out.text, attachmentId });
       if (res.error) return fail();
       const saved: Message = res.message;
-      setMessages((prev) => {
-        const list = (prev[conversationId] ?? []).filter((m) => m.id !== tempId && m.id !== saved.id);
-        return { ...prev, [conversationId]: [...list.filter((m) => !m.local), saved, ...list.filter((m) => m.local)] };
-      });
+      replaceMessage(conversationId, tempId, saved);
       patchConversation(conversationId, (c) => ({ ...c, lastMessage: saved, updatedAt: saved.createdAt }));
     } catch {
       fail();
     }
-  }, [me]);
+  }, [me, api]);
 
-  const discard = useCallback((conversationId: number, tempId: number) =>
-    setMessages((prev) => ({ ...prev, [conversationId]: (prev[conversationId] ?? []).filter((m) => m.id !== tempId) })), []);
+  const discard = useCallback((conversationId: number, tempId: number) => replaceMessage(conversationId, tempId, null), []);
+
+  // Edit / delete for everyone. Resolves to an error message, or null.
+  const change = useCallback(async (event: "message:edit" | "message:delete", payload: object) => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return "Sei offline: riprova quando torna la connessione.";
+    try {
+      const res = await socket.timeout(10000).emitWithAck(event, payload);
+      if (res.error) return res.error as string;
+      const m: Message = res.message;
+      replaceMessage(m.conversationId, m.id, m);
+      setConversations((list) => list.map((c) =>
+        c.id === m.conversationId && c.lastMessage?.id === m.id ? { ...c, lastMessage: m } : c));
+      return null;
+    } catch {
+      return "Il server non risponde. Riprova.";
+    }
+  }, []);
+  const editMessage = useCallback((messageId: number, text: string) => change("message:edit", { messageId, text }), [change]);
+  const deleteMessage = useCallback((messageId: number) => change("message:delete", { messageId }), [change]);
 
   const sendTyping = useCallback((conversationId: number, on: boolean) => emit("typing", { conversationId, typing: on }), []);
 
@@ -212,7 +257,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
 
   return {
     connected, loaded, conversations, messages, typing, totalUnread,
-    openConversation, loadOlder, send, discard, sendTyping, addConversation,
+    openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
   };
 }
 

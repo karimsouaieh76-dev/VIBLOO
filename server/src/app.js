@@ -6,9 +6,12 @@ import cors from "cors";
 import { Server } from "socket.io";
 import { openDb } from "./db/index.js";
 import { hashPassword, verifyPassword, makeTokens } from "./auth.js";
+import { createPush, notificationText } from "./push.js";
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
 const MAX_MESSAGE = 4000;
+const MAX_UPLOAD = 15 * 1024 * 1024;
+const EDIT_WINDOW = 24 * 60 * 60 * 1000;
 const MAX_GROUP = 256;
 const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 
@@ -19,10 +22,14 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
   if (!secret) throw new Error("JWT secret mancante");
   const db = await openDb({ dbFile, databaseUrl });
   const tokens = makeTokens(secret);
+  const push = await createPush(db);
 
   // userId -> number of open connections
   const online = new Map();
   const isOnline = (id) => (online.get(id) ?? 0) > 0;
+  // userId -> sockets whose app is on screen; those people get no push.
+  const visible = new Map();
+  const isLooking = (id) => (visible.get(id)?.size ?? 0) > 0;
 
   // Adds live "online" flags to conversation summaries.
   const withPresence = (convs) =>
@@ -32,11 +39,14 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
 
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: "32kb" }));
+  // JSON bodies everywhere except file uploads, which arrive as raw bytes.
+  const json = express.json({ limit: "32kb" });
+  app.use((req, res, next) => (req.path.endsWith("/attachments") ? next() : json(req, res, next)));
 
+  // Token from the Authorization header, or from ?token= for <img>/<audio> sources.
   const requireUser = (req, res, next) => {
     const header = req.get("authorization") || "";
-    const user = tokens.verify(header.replace(/^Bearer\s+/i, ""));
+    const user = tokens.verify(header.replace(/^Bearer\s+/i, "") || String(req.query.token ?? ""));
     if (!user) return res.status(401).json({ error: "Sessione scaduta: accedi di nuovo." });
     req.user = user;
     next();
@@ -126,6 +136,65 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
     res.json({ messages: await db.messages(id, before, limit) });
   });
 
+  // Upload the raw file body first, then send a message that points to it.
+  app.post("/api/conversations/:id/attachments",
+    requireUser,
+    express.raw({ type: () => true, limit: MAX_UPLOAD }),
+    async (req, res) => {
+      const id = toId(req.params.id);
+      if (!id || !(await db.isMember(id, req.user.id))) return res.status(404).json({ error: "Chat non trovata." });
+      if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "Il file è vuoto." });
+      const mime = String(req.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
+      let name = "file";
+      try { name = decodeURIComponent(req.get("x-file-name") || "file"); } catch { /* keep default */ }
+      const num = (h) => (Number.isFinite(Number(req.get(h))) && req.get(h) ? Math.round(Number(req.get(h))) : null);
+      const attachment = await db.createAttachment({
+        conversationId: id, userId: req.user.id, mime, name: name.slice(0, 200), data: req.body,
+        width: num("x-width"), height: num("x-height"), duration: num("x-duration"),
+      });
+      res.status(201).json({ attachment });
+    });
+
+  // Serves a file to members of its chat. Supports Range requests, which
+  // Safari needs to play audio.
+  app.get("/api/attachments/:id", requireUser, async (req, res) => {
+    const id = toId(req.params.id);
+    const file = id && (await db.attachmentData(id));
+    if (!file || !(await db.isMember(file.conversationId, req.user.id))) return res.status(404).json({ error: "File non trovato." });
+    const inline = /^(image|audio|video)\//.test(file.mime) && !req.query.download;
+    res.set({
+      "Content-Type": file.mime,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "Accept-Ranges": "bytes",
+      "X-Content-Type-Options": "nosniff",
+    });
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.get("range") || "");
+    if (range) {
+      const size = file.data.length;
+      let start = range[1] ? Number(range[1]) : size - Number(range[2]);
+      let end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      start = Math.max(0, start);
+      if (start > end || start >= size) return res.status(416).set("Content-Range", `bytes */${size}`).end();
+      return res.status(206).set("Content-Range", `bytes ${start}-${end}/${size}`).send(file.data.subarray(start, end + 1));
+    }
+    res.send(file.data);
+  });
+
+  app.get("/api/push/key", requireUser, (_req, res) => res.json({ publicKey: push.publicKey }));
+  app.post("/api/push/subscribe", requireUser, async (req, res) => {
+    const sub = req.body?.subscription;
+    if (typeof sub?.endpoint !== "string" || !/^https:\/\//.test(sub.endpoint) || !sub.keys?.p256dh || !sub.keys?.auth) {
+      return res.status(400).json({ error: "Iscrizione alle notifiche non valida." });
+    }
+    await db.savePushSubscription(req.user.id, sub);
+    res.json({ ok: true });
+  });
+  app.post("/api/push/unsubscribe", requireUser, async (req, res) => {
+    if (typeof req.body?.endpoint === "string") await db.deletePushSubscription(req.body.endpoint);
+    res.json({ ok: true });
+  });
+
   // The web app (built from ../app with `npm run build:web`) is served from
   // the same address, so phones only need to open this server's link.
   if (existsSync(PUBLIC_DIR)) {
@@ -146,6 +215,15 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
     for (const id of await db.memberIds(conversationId)) {
       if (id !== exceptUserId) io.to(userRoom(id)).emit(event, payload);
     }
+  };
+
+  // Push to members who are not looking at the app right now.
+  const notify = (conversationId, message, userIds) => {
+    if (!userIds.length) return;
+    (async () => {
+      const meta = await db.conversationMeta(conversationId);
+      await push.send(userIds, { ...notificationText(message, meta), conversationId, tag: `c${conversationId}` });
+    })().catch((err) => console.error(err));
   };
 
   io.use((socket, next) => {
@@ -172,15 +250,59 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
         }
       });
 
-    handle("message:send", async ({ conversationId, text }, reply) => {
+    handle("message:send", async ({ conversationId, text, attachmentId }, reply) => {
       const id = toId(conversationId);
       const body = typeof text === "string" ? text.trim() : "";
-      if (!body) return reply({ error: "Il messaggio è vuoto." });
       if (body.length > MAX_MESSAGE) return reply({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
       if (!id || !(await db.isMember(id, user.id))) return reply({ error: "Chat non trovata." });
-      const message = await db.addMessage(id, user.id, body);
+      let attachment = null;
+      if (attachmentId !== undefined && attachmentId !== null) {
+        attachment = await db.attachmentInfo(toId(attachmentId) ?? 0);
+        if (!attachment || attachment.conversationId !== id || attachment.userId !== user.id || attachment.used > 0) {
+          return reply({ error: "Allegato non valido. Riprova a inviarlo." });
+        }
+      }
+      if (!body && !attachment) return reply({ error: "Il messaggio è vuoto." });
+      const message = await db.addMessage(id, user.id, body, attachment);
       reply({ message });
-      await toMembers(id, "message:new", message);
+      const members = await db.memberIds(id);
+      for (const m of members) io.to(userRoom(m)).emit("message:new", message);
+      notify(id, message, members.filter((m) => m !== user.id && !isLooking(m)));
+    });
+
+    // Only the author can change a message: text edits within 24 hours,
+    // deleting for everyone at any time.
+    const ownMessage = async (messageId) => {
+      const m = await db.getMessage(toId(messageId) ?? 0);
+      if (!m || m.userId !== user.id) return { error: "Puoi modificare solo i tuoi messaggi." };
+      if (m.deletedAt) return { error: "Il messaggio è già stato eliminato." };
+      return { message: m };
+    };
+
+    handle("message:edit", async ({ messageId, text }, reply) => {
+      const { message, error } = await ownMessage(messageId);
+      if (error) return reply({ error });
+      const body = typeof text === "string" ? text.trim() : "";
+      if (!body && !message.attachment) return reply({ error: "Il messaggio non può restare vuoto." });
+      if (body.length > MAX_MESSAGE) return reply({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
+      if (Date.now() - message.createdAt > EDIT_WINDOW) return reply({ error: "Puoi modificare un messaggio solo entro 24 ore." });
+      const updated = await db.editMessage(message.id, body);
+      reply({ message: updated });
+      await toMembers(updated.conversationId, "message:update", updated);
+    });
+
+    handle("message:delete", async ({ messageId }, reply) => {
+      const { message, error } = await ownMessage(messageId);
+      if (error) return reply({ error });
+      const updated = await db.deleteMessage(message.id);
+      reply({ message: updated });
+      await toMembers(updated.conversationId, "message:update", updated);
+    });
+
+    handle("visibility", async ({ visible: on }) => {
+      const set = visible.get(user.id) ?? new Set();
+      if (on) set.add(socket.id); else set.delete(socket.id);
+      visible.set(user.id, set);
     });
 
     handle("delivered", async ({ conversationId, messageId }) => {
@@ -202,6 +324,7 @@ export async function createServer({ dbFile = "cortile.db", databaseUrl, secret 
     });
 
     socket.on("disconnect", async () => {
+      visible.get(user.id)?.delete(socket.id);
       const left = (online.get(user.id) ?? 1) - 1;
       if (left > 0) return online.set(user.id, left);
       online.delete(user.id);

@@ -1,25 +1,39 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Conversation, User } from "../api";
+import type { Api, Conversation, User } from "../api";
 import type { Messenger } from "../useMessenger";
 import { Avatar, Ticks } from "../components";
-import { conversationTitle, formatListDate, messageStatus, otherMembers } from "../format";
+import { conversationTitle, formatListDate, messagePreview, messageStatus, otherMembers } from "../format";
+import { enablePush, pushState, PushState } from "../push";
 import { Theme, useTheme } from "../theme";
 
 type Props = {
   me: User;
+  api: Api;
   messenger: Messenger;
   onOpen: (c: Conversation) => void;
   onNewChat: () => void;
   onLogout: () => void;
 };
 
-export function ChatsScreen({ me, messenger, onOpen, onNewChat, onLogout }: Props) {
+export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }: Props) {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState("");
+  const [push, setPush] = useState<PushState>(pushState());
+  const [pushError, setPushError] = useState("");
+  useEffect(() => setPush(pushState()), []);
+
+  async function turnOnPush() {
+    setPushError("");
+    try {
+      setPush(await enablePush(api));
+    } catch {
+      setPushError("Non sono riuscito ad attivare le notifiche. Riprova più tardi.");
+    }
+  }
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -33,6 +47,25 @@ export function ChatsScreen({ me, messenger, onOpen, onNewChat, onLogout }: Prop
         <Pressable onPress={onLogout} hitSlop={10} accessibilityRole="button"><Text style={s.link}>Esci</Text></Pressable>
       </View>
       {!messenger.connected && <Text style={s.offline}>In attesa di connessione…</Text>}
+      {push === "default" && (
+        <View style={s.banner}>
+          <Text style={s.bannerText}>Attiva le notifiche per sapere quando ti scrivono, anche ad app chiusa.</Text>
+          <Pressable style={s.bannerButton} onPress={turnOnPush} accessibilityRole="button">
+            <Text style={s.bannerButtonText}>Attiva</Text>
+          </Pressable>
+        </View>
+      )}
+      {push === "needs-install" && (
+        <View style={s.banner}>
+          <Text style={s.bannerText}>
+            Per ricevere le notifiche su iPhone aggiungi Cortile alla schermata Home: tasto Condividi, poi "Aggiungi alla schermata Home".
+          </Text>
+        </View>
+      )}
+      {push === "denied" && (
+        <Text style={s.pushOff}>Notifiche bloccate: puoi riattivarle dalle impostazioni del browser per questo sito.</Text>
+      )}
+      {pushError ? <Text style={s.pushOff}>{pushError}</Text> : null}
       <View style={s.searchWrap}>
         <TextInput
           style={s.search} value={query} onChangeText={setQuery} placeholder="Cerca nelle chat"
@@ -81,9 +114,9 @@ function Row({ c, me, typing, onPress, t }: { c: Conversation; me: User; typing:
   } else if (last) {
     preview = (
       <View style={s.previewRow}>
-        {mine && <Ticks status={messageStatus(c, me, last)} />}
+        {mine && !last.deletedAt && <Ticks status={messageStatus(c, me, last)} />}
         <Text style={s.preview} numberOfLines={1}>
-          {c.isGroup && !mine ? `${last.username}: ` : ""}{last.text}
+          {c.isGroup && !mine && !last.deletedAt ? `${last.username}: ` : ""}{messagePreview(last, me)}
         </Text>
       </View>
     );
@@ -114,6 +147,14 @@ const styles = (t: Theme) => StyleSheet.create({
   brand: { fontSize: 30, fontWeight: "800", color: t.fg, letterSpacing: -0.8 },
   link: { color: t.accent, fontWeight: "600", fontSize: 15 },
   offline: { color: t.danger, fontSize: 13, paddingHorizontal: 20 },
+  banner: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 16, marginTop: 6, padding: 12,
+    borderRadius: 12, backgroundColor: t.accentSoft,
+  },
+  bannerText: { flex: 1, color: t.fg, fontSize: 14, lineHeight: 19 },
+  bannerButton: { backgroundColor: t.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  bannerButtonText: { color: t.accentFg, fontWeight: "700" },
+  pushOff: { color: t.muted, fontSize: 12.5, paddingHorizontal: 20, paddingTop: 4 },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 8 },
   search: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: t.fg },
   row: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 10 },

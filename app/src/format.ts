@@ -47,6 +47,27 @@ export function conversationTitle(c: Conversation, me: User) {
 
 export type Status = "pending" | "sent" | "delivered" | "read" | "failed";
 
+export function formatDuration(ms: number | null | undefined) {
+  const total = Math.max(0, Math.round((ms ?? 0) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+export function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
+}
+
+// One line for the chat list and notifications.
+export function messagePreview(m: Message, me: User) {
+  if (m.deletedAt) return m.userId === me.id ? "🚫 Hai eliminato questo messaggio" : "🚫 Messaggio eliminato";
+  const a = m.attachment;
+  if (m.kind === "image") return m.text ? `📷 ${m.text}` : "📷 Foto";
+  if (m.kind === "audio") return `🎤 Messaggio vocale (${formatDuration(a?.duration)})`;
+  if (m.kind === "file") return `📎 ${a?.name ?? "File"}`;
+  return m.text;
+}
+
 // WhatsApp-style ticks: every other member must have received / read it.
 export function messageStatus(c: Conversation, me: User, m: Message): Status {
   const others = otherMembers(c, me);

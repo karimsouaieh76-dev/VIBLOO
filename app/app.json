@@ -23,6 +23,22 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "scheme": "cortile"
+    "scheme": "cortile",
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Cortile usa il microfono per registrare i messaggi vocali."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cortile usa le tue foto solo per inviarle nelle chat.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ]
   }
 }

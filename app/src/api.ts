@@ -3,13 +3,36 @@ import { Platform } from "react-native";
 export type User = { id: number; username: string };
 export type Person = User & { online: boolean; lastSeen: number | null };
 export type Member = Person & { lastReadId: number; lastDeliveredId: number };
+export type Attachment = {
+  id: number;
+  mime: string;
+  name: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  duration: number | null; // milliseconds, voice notes only
+};
+export type MessageKind = "text" | "image" | "audio" | "file";
 export type Message = {
   id: number;
   conversationId: number;
   userId: number;
   username: string;
+  kind: MessageKind;
   text: string;
   createdAt: number;
+  editedAt: number | null;
+  deletedAt: number | null;
+  attachment: Attachment | null;
+};
+// A file picked or recorded on this device, before upload.
+export type LocalFile = {
+  uri: string;
+  mime: string;
+  name: string;
+  width?: number;
+  height?: number;
+  duration?: number;
 };
 export type Conversation = {
   id: number;
@@ -71,6 +94,26 @@ export function createApi(baseUrl: string, token?: string) {
       post<{ conversation: Conversation }>("/api/conversations", { name, userIds }),
     messages: (conversationId: number, before?: number) =>
       request<{ messages: Message[] }>(`/api/conversations/${conversationId}/messages${before ? `?before=${before}` : ""}`),
+
+    async upload(conversationId: number, file: LocalFile) {
+      const data = await (await fetch(file.uri)).blob();
+      // A recorder may pick a different container than asked; trust the recording.
+      const type = file.mime.startsWith("audio/") && data.type ? data.type : file.mime;
+      const headers: Record<string, string> = { "content-type": type, "x-file-name": encodeURIComponent(file.name) };
+      if (file.width) headers["x-width"] = String(file.width);
+      if (file.height) headers["x-height"] = String(file.height);
+      if (file.duration) headers["x-duration"] = String(Math.round(file.duration));
+      return request<{ attachment: Attachment }>(`/api/conversations/${conversationId}/attachments`, {
+        method: "POST", body: data, headers,
+      });
+    },
+    // <img> and <audio> cannot send headers, so the token rides in the URL.
+    attachmentUrl: (id: number, download = false) =>
+      `${root}/api/attachments/${id}?token=${encodeURIComponent(token ?? "")}${download ? "&download=1" : ""}`,
+
+    pushKey: () => request<{ publicKey: string }>("/api/push/key"),
+    pushSubscribe: (subscription: unknown) => post<{ ok: true }>("/api/push/subscribe", { subscription }),
+    pushUnsubscribe: (endpoint: string) => post<{ ok: true }>("/api/push/unsubscribe", { endpoint }),
   };
 }
 

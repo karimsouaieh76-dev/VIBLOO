@@ -14,7 +14,7 @@ export async function createPush(db) {
       await db.setSetting("vapid_private", privateKey);
     }
   }
-  const subject = process.env.VAPID_SUBJECT || "mailto:cortile@example.org";
+  const subject = process.env.VAPID_SUBJECT || "mailto:vibloo@example.org";
   webpush.setVapidDetails(subject, publicKey, privateKey);
 
   return {

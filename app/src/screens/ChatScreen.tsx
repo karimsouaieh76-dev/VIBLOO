@@ -141,7 +141,7 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack }
     setError("");
     try {
       const perm = await requestRecordingPermissionsAsync();
-      if (!perm.granted) return setError("Per i messaggi vocali consenti a Cortile di usare il microfono.");
+      if (!perm.granted) return setError("Per i messaggi vocali consenti a Vibloo di usare il microfono.");
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();

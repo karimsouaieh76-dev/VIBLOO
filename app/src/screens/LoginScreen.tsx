@@ -40,8 +40,8 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-        <Text style={s.brand}>Cortile</Text>
-        <Text style={s.tagline}>La chat del tuo gruppo.</Text>
+        <Text style={s.brand}>Vibloo</Text>
+        <Text style={s.tagline}>Scrivi a chi vuoi, subito.</Text>
 
         <View style={s.tabs}>
           {(["login", "register"] as const).map((m) => (

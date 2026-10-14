@@ -252,7 +252,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
 
   const totalUnread = conversations.reduce((n, c) => n + c.unread, 0);
   useEffect(() => {
-    if (Platform.OS === "web") document.title = totalUnread ? `(${totalUnread}) Cortile` : "Cortile";
+    if (Platform.OS === "web") document.title = totalUnread ? `(${totalUnread}) Vibloo` : "Vibloo";
   }, [totalUnread]);
 
   return {

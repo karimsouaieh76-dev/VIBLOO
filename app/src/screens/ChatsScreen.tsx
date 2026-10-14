@@ -43,7 +43,7 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }:
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <View style={s.header}>
-        <Text style={s.brand}>Cortile</Text>
+        <Text style={s.brand}>Vibloo</Text>
         <Pressable onPress={onLogout} hitSlop={10} accessibilityRole="button"><Text style={s.link}>Esci</Text></Pressable>
       </View>
       {!messenger.connected && <Text style={s.offline}>In attesa di connessione…</Text>}
@@ -58,7 +58,7 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }:
       {push === "needs-install" && (
         <View style={s.banner}>
           <Text style={s.bannerText}>
-            Per ricevere le notifiche su iPhone aggiungi Cortile alla schermata Home: tasto Condividi, poi "Aggiungi alla schermata Home".
+            Per ricevere le notifiche su iPhone aggiungi Vibloo alla schermata Home: tasto Condividi, poi "Aggiungi alla schermata Home".
           </Text>
         </View>
       )}

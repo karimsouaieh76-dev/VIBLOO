@@ -2,7 +2,7 @@ import { Platform } from "react-native";
 import type { Api } from "./api";
 
 // Web Push for the installed web app (Android, desktop, and iPhone once
-// Cortile is added to the Home Screen).
+// Vibloo is added to the Home Screen).
 
 export type PushState = "unsupported" | "needs-install" | "default" | "granted" | "denied";
 

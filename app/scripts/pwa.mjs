@@ -6,9 +6,9 @@ const out = new URL("../../server/public/", import.meta.url);
 cpSync(new URL("../web-assets/", import.meta.url), out, { recursive: true });
 
 writeFileSync(new URL("manifest.webmanifest", out), JSON.stringify({
-  name: "Cortile",
-  short_name: "Cortile",
-  description: "La chat del tuo gruppo.",
+  name: "Vibloo",
+  short_name: "Vibloo",
+  description: "Scrivi a chi vuoi, subito.",
   start_url: "/",
   display: "standalone",
   background_color: "#edf1f0",
@@ -28,11 +28,11 @@ const head = [
   '<meta name="theme-color" content="#1d6b60">',
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="mobile-web-app-capable" content="yes">',
-  '<meta name="apple-mobile-web-app-title" content="Cortile">',
+  '<meta name="apple-mobile-web-app-title" content="Vibloo">',
 ].join("");
 const html = readFileSync(indexUrl, "utf8")
   .replace(/<html lang="[^"]*"/, '<html lang="it"')
-  .replace(/<title>[^<]*<\/title>/, "<title>Cortile</title>")
+  .replace(/<title>[^<]*<\/title>/, "<title>Vibloo</title>")
   .replace("</head>", head + "</head>");
 writeFileSync(indexUrl, html);
 console.log("App web pronta in server/public");

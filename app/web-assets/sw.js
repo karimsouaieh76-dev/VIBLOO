@@ -1,4 +1,4 @@
-// Cortile service worker: shows push notifications and opens the right chat
+// Vibloo service worker: shows push notifications and opens the right chat
 // when one is tapped.
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -6,9 +6,9 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 
 self.addEventListener("push", (event) => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { data = { title: "Cortile", body: event.data?.text() }; }
+  try { data = event.data ? event.data.json() : {}; } catch { data = { title: "Vibloo", body: event.data?.text() }; }
   event.waitUntil(
-    self.registration.showNotification(data.title || "Cortile", {
+    self.registration.showNotification(data.title || "Vibloo", {
       body: data.body || "Nuovo messaggio",
       tag: data.tag,
       renotify: Boolean(data.tag),

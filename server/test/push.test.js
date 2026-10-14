@@ -16,7 +16,7 @@ let nextStatus = 201;
 const sockets = [];
 
 before(async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cortile-push-"));
+  const dir = mkdtempSync(join(tmpdir(), "vibloo-push-"));
   execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost",
     "-addext", "subjectAltName=DNS:localhost", "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")], { stdio: "ignore" });
   const cert = readFileSync(join(dir, "cert.pem"));

@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Cortile",
-    "slug": "cortile",
+    "name": "Vibloo",
+    "slug": "vibloo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cortile.app"
+      "bundleIdentifier": "com.vibloo.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,23 +18,23 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.cortile.app"
+      "package": "com.vibloo.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "scheme": "cortile",
+    "scheme": "vibloo",
     "plugins": [
       [
         "expo-audio",
         {
-          "microphonePermission": "Cortile usa il microfono per registrare i messaggi vocali."
+          "microphonePermission": "Vibloo usa il microfono per registrare i messaggi vocali."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Cortile usa le tue foto solo per inviarle nelle chat.",
+          "photosPermission": "Vibloo usa le tue foto solo per inviarle nelle chat.",
           "cameraPermission": false,
           "microphonePermission": false
         }

@@ -1,4 +1,4 @@
-# Cortile
+# Vibloo
 
 App di messaggistica istantanea, in stile WhatsApp:
 
@@ -13,8 +13,8 @@ App di messaggistica istantanea, in stile WhatsApp:
 
 ### Notifiche
 
-Alla prima apertura Cortile mostra "Attiva le notifiche". Funzionano su Android, sui computer e
-su iPhone/iPad (iOS 16.4 o successivo) **solo dopo** aver aggiunto Cortile alla schermata Home.
+Alla prima apertura Vibloo mostra "Attiva le notifiche". Funzionano su Android, sui computer e
+su iPhone/iPad (iOS 16.4 o successivo) **solo dopo** aver aggiunto Vibloo alla schermata Home.
 Le notifiche richiedono un indirizzo `https://`, quindi funzionano con la versione online
 (Render), non con quella sulla rete di casa (`http://192.168…`).
 
@@ -25,14 +25,14 @@ Le notifiche richiedono un indirizzo `https://`, quindi funzionano con la versio
 
 1. Installa **Node.js** da <https://nodejs.org> (versione LTS, basta farlo una volta).
 2. Fai doppio clic su:
-   - **`Avvia Cortile (Windows).bat`** su Windows
-   - **`Avvia Cortile (Mac).command`** su Mac (la prima volta: tasto destro → Apri)
+   - **`Avvia Vibloo (Windows).bat`** su Windows
+   - **`Avvia Vibloo (Mac).command`** su Mac (la prima volta: tasto destro → Apri)
 3. Si apre una finestra con un **codice QR**: inquadralo con la fotocamera del telefono
    (il telefono deve essere sulla stessa rete Wi-Fi del computer).
 4. Sul telefono scegli **"Aggiungi a schermata Home"** (Safari: tasto Condividi; Chrome: menu ⋮).
-   Cortile compare tra le app, con la sua icona.
+   Vibloo compare tra le app, con la sua icona.
 
-Finché la finestra resta aperta, la chat funziona. I messaggi sono salvati in `server/cortile.db`.
+Finché la finestra resta aperta, la chat funziona. I messaggi sono salvati in `server/vibloo.db`.
 
 Da terminale è lo stesso: `cd server && npm install && npm start`.
 
@@ -41,18 +41,18 @@ Da terminale è lo stesso: `cd server && npm install && npm start`.
 Servono tre account gratuiti: **GitHub** (per il codice), **Neon** (il database dove restano
 salvati i messaggi) e **Render** (il server che tiene accesa la chat).
 
-1. **GitHub** — su <https://github.com/new> crea un repository chiamato `cortile` e carica
+1. **GitHub** — su <https://github.com/new> crea un repository chiamato `vibloo` e carica
    tutti i file di questa cartella ("uploading an existing file", trascinando i file).
 2. **Neon** — su <https://neon.tech> crea un progetto (regione Europa). Nella pagina
    *Connect* copia la **connection string**, quella che inizia con `postgresql://`.
 3. **Render** — apri questo link, sostituendo `TUONOME` con il tuo nome utente GitHub:
 
-   `https://render.com/deploy?repo=https://github.com/TUONOME/cortile`
+   `https://render.com/deploy?repo=https://github.com/TUONOME/vibloo`
 
    Accedi con GitHub, incolla la connection string di Neon nel campo `DATABASE_URL` e
    premi **Deploy**.
 
-Dopo qualche minuto Render ti dà l'indirizzo, per esempio `https://cortile-abcd.onrender.com`.
+Dopo qualche minuto Render ti dà l'indirizzo, per esempio `https://vibloo-abcd.onrender.com`.
 Mandalo a chi vuoi: lo apre dal telefono e sceglie "Aggiungi a schermata Home".
 
 Nel piano gratuito di Render il server si addormenta dopo 15 minuti senza visite: la prima
@@ -84,7 +84,7 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 |--------------|-----------------|--------------------------------------------|
 | `PORT`       | `3000`          |                                            |
 | `DATABASE_URL` | —             | Postgres (es. Neon); se manca usa il file SQLite |
-| `DB_FILE`    | `cortile.db`    | file SQLite                                |
+| `DB_FILE`    | `vibloo.db`    | file SQLite                                |
 | `JWT_SECRET` | generata        | se manca viene creata e salvata accanto al database |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
 

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cortile
+    name: vibloo
     runtime: node
     plan: free
     rootDir: server

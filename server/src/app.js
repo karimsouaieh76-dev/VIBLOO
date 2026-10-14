@@ -18,7 +18,7 @@ const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 const toId = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
 const userRoom = (id) => `u:${id}`;
 
-export async function createServer({ dbFile = "cortile.db", databaseUrl, secret }) {
+export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }) {
   if (!secret) throw new Error("JWT secret mancante");
   const db = await openDb({ dbFile, databaseUrl });
   const tokens = makeTokens(secret);

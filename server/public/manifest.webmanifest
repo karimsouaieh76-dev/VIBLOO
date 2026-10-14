@@ -1,7 +1,7 @@
 {
-  "name": "Cortile",
-  "short_name": "Cortile",
-  "description": "La chat del tuo gruppo.",
+  "name": "Vibloo",
+  "short_name": "Vibloo",
+  "description": "Scrivi a chi vuoi, subito.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#edf1f0",

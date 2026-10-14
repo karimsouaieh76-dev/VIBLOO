@@ -5,7 +5,7 @@ import qrcode from "qrcode-terminal";
 import { createServer } from "./app.js";
 
 const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = process.env.DB_FILE || "cortile.db";
+const DB_FILE = process.env.DB_FILE || "vibloo.db";
 
 // Without JWT_SECRET, generate one on first start and keep it next to the
 // database, so people stay logged in across restarts.
@@ -32,9 +32,9 @@ const { httpServer } = await createServer({
 });
 const online = Boolean(process.env.RENDER || process.env.DATABASE_URL);
 httpServer.listen(PORT, "0.0.0.0", () => {
-  if (online) return console.log(`Cortile in ascolto sulla porta ${PORT}`);
+  if (online) return console.log(`Vibloo in ascolto sulla porta ${PORT}`);
   const lan = lanAddresses();
-  console.log("\n  Cortile è acceso.\n");
+  console.log("\n  Vibloo è acceso.\n");
   console.log(`  Su questo computer:  http://localhost:${PORT}`);
   for (const url of lan) console.log(`  Sul telefono:        ${url}`);
   if (lan.length) {

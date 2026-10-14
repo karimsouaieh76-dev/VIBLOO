@@ -1,5 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
@@ -19,8 +20,16 @@ const toId = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : 
 const userRoom = (id) => `u:${id}`;
 
 export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }) {
-  if (!secret) throw new Error("JWT secret mancante");
   const db = await openDb({ dbFile, databaseUrl });
+  // Without a configured secret, generate one once and keep it in the
+  // database, so logins survive restarts on hosts without a persistent disk.
+  if (!secret) {
+    secret = await db.getSetting("jwt_secret");
+    if (!secret) {
+      secret = randomBytes(32).toString("hex");
+      await db.setSetting("jwt_secret", secret);
+    }
+  }
   const tokens = makeTokens(secret);
   const push = await createPush(db);
 

@@ -223,3 +223,15 @@ test("notifiche push: chiave e iscrizione", async () => {
   await call("POST", "/api/push/unsubscribe", o.token, { endpoint: sub.endpoint });
   assert.equal((await server.db.pushSubscriptionsFor([o.user.id])).length, 0);
 });
+
+test("senza JWT_SECRET la chiave viene creata una volta e conservata nel database", async () => {
+  const dir = (await import("node:fs")).mkdtempSync((await import("node:path")).join((await import("node:os")).tmpdir(), "vibloo-"));
+  const dbFile = `${dir}/s.db`;
+  const first = await createServer({ dbFile });
+  const key = await first.db.getSetting("jwt_secret");
+  assert.match(key, /^[0-9a-f]{64}$/);
+  first.io.close(); await first.db.close();
+  const second = await createServer({ dbFile });
+  assert.equal(await second.db.getSetting("jwt_secret"), key);
+  second.io.close(); await second.db.close();
+});

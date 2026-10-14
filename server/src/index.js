@@ -7,10 +7,11 @@ import { createServer } from "./app.js";
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = process.env.DB_FILE || "vibloo.db";
 
-// Without JWT_SECRET, generate one on first start and keep it next to the
-// database, so people stay logged in across restarts.
+// Without JWT_SECRET, a local install keeps a generated one next to the SQLite
+// file; with DATABASE_URL the server keeps it in the database instead.
 function loadSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.DATABASE_URL) return undefined;
   const file = `${DB_FILE}.secret`;
   if (existsSync(file)) return readFileSync(file, "utf8").trim();
   const secret = randomBytes(32).toString("hex");

@@ -92,7 +92,7 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | `PORT`       | `3000`          |                                            |
 | `DATABASE_URL` | —             | Postgres (Supabase, Neon…); se manca usa il file SQLite |
 | `DB_FILE`    | `vibloo.db`    | file SQLite                                |
-| `JWT_SECRET` | generata        | se manca viene creata e salvata accanto al database |
+| `JWT_SECRET` | generata        | se manca viene creata e salvata (nel database online, o accanto al file SQLite) |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
 
 ## Test

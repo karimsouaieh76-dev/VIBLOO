@@ -4,6 +4,7 @@ import {
 } from "react-native";
 import { createApi, SAME_ORIGIN, User } from "../api";
 import { Theme, useTheme } from "../theme";
+import { Logo } from "../Logo";
 
 type Props = {
   initialServerUrl: string;
@@ -40,7 +41,7 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-        <Text style={s.brand}>Vibloo</Text>
+        <View style={{ marginBottom: 6 }}><Logo height={54} /></View>
         <Text style={s.tagline}>Scrivi a chi vuoi, subito.</Text>
 
         <View style={s.tabs}>
@@ -89,7 +90,6 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
 const styles = (t: Theme) => StyleSheet.create({
   root: { flex: 1, backgroundColor: t.bg },
   content: { padding: 24, paddingTop: 64, gap: 8, maxWidth: 440, width: "100%", alignSelf: "center" },
-  brand: { fontSize: 40, fontWeight: "700", color: t.fg, letterSpacing: -1 },
   tagline: { fontSize: 16, color: t.muted, marginBottom: 24 },
   tabs: { flexDirection: "row", backgroundColor: t.panel, borderRadius: 12, padding: 4, borderWidth: 1, borderColor: t.line, marginBottom: 12 },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },

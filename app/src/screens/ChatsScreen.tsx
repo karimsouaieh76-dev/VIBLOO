@@ -7,6 +7,7 @@ import { Avatar, Ticks } from "../components";
 import { conversationTitle, formatListDate, messagePreview, messageStatus, otherMembers } from "../format";
 import { enablePush, pushState, PushState, syncPush } from "../push";
 import { Theme, useTheme } from "../theme";
+import { Logo } from "../Logo";
 
 type Props = {
   me: User;
@@ -68,7 +69,7 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <View style={s.header}>
-        <Text style={s.brand}>Vibloo</Text>
+        <Logo height={30} />
         <Pressable onPress={onProfile} hitSlop={10} accessibilityRole="button" accessibilityLabel="Profilo">
           <Avatar name={me.username} id={me.id} size={38} photo={messenger.myAvatarAt} />
         </Pressable>
@@ -179,7 +180,6 @@ function Row({ c, me, typing, onPress, t }: { c: Conversation; me: User; typing:
 const styles = (t: Theme) => StyleSheet.create({
   root: { flex: 1, backgroundColor: t.bg },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 },
-  brand: { fontSize: 30, fontWeight: "800", color: t.fg, letterSpacing: -0.8 },
   link: { color: t.accent, fontWeight: "600", fontSize: 15 },
   offline: { color: t.danger, fontSize: 13, paddingHorizontal: 20 },
   banner: {

@@ -29,8 +29,12 @@ const head = [
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-title" content="Vibloo">',
+  '<meta name="apple-mobile-web-app-status-bar-style" content="default">',
 ].join("");
 const html = readFileSync(indexUrl, "utf8")
+  // Lets the page reach under the iPhone home bar, so the app can keep its
+  // controls clear of it (safe-area insets are 0 without this).
+  .replace(/<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />')
   .replace(/<html lang="[^"]*"/, '<html lang="it"')
   .replace(/<title>[^<]*<\/title>/, "<title>Vibloo</title>")
   .replace("</head>", head + "</head>");

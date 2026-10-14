@@ -1,5 +1,6 @@
 import { Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { formatDuration, formatSize, initials, Status } from "./format";
 import { avatarColor, Theme, useTheme } from "./theme";
 
@@ -29,12 +30,12 @@ export function Avatar({ name, id, size = 48, online, group }: {
 }
 
 // ✓ sent · ✓✓ delivered · blue ✓✓ read · clock while sending · ! failed
-export function Ticks({ status, size = 13 }: { status: Status; size?: number }) {
+export function Ticks({ status, size = 13, onAccent }: { status: Status; size?: number; onAccent?: boolean }) {
   const t = useTheme();
   const s = tickStyles(t, size);
   if (status === "pending") return <Text style={[s.tick, { color: t.tick }]} accessibilityLabel="In invio">🕓</Text>;
   if (status === "failed") return <Text style={[s.tick, { color: t.danger, fontWeight: "800" }]} accessibilityLabel="Non inviato">!</Text>;
-  const color = status === "read" ? t.tickRead : t.tick;
+  const color = onAccent ? t.accentFg : status === "read" ? t.tickRead : t.tick;
   const label = status === "read" ? "Letto" : status === "delivered" ? "Consegnato" : "Inviato";
   return (
     <Text style={[s.tick, { color }]} accessibilityLabel={label}>
@@ -47,12 +48,18 @@ const tickStyles = (_t: Theme, size: number) => StyleSheet.create({
   tick: { fontSize: size, fontWeight: "700", letterSpacing: -3, paddingRight: 3 },
 });
 
-export function AudioBubble({ uri, duration, mine }: { uri: string; duration: number | null; mine: boolean }) {
+// Messenger-style voice note: round play button, waveform bars that fill as
+// it plays, duration on the right. `onAccent` when drawn on the coloured bubble.
+export function AudioBubble({ uri, duration, seed, onAccent }: {
+  uri: string; duration: number | null; seed: number; onAccent: boolean;
+}) {
   const t = useTheme();
   const player = useAudioPlayer({ uri });
   const status = useAudioPlayerStatus(player);
   const total = status.duration > 0 && Number.isFinite(status.duration) ? status.duration * 1000 : duration ?? 0;
   const progress = total ? Math.min(1, (status.currentTime * 1000) / total) : 0;
+  const bars = waveform(seed, 26);
+  const fg = onAccent ? t.accentFg : t.accent;
 
   function toggle() {
     if (status.playing) return player.pause();
@@ -61,25 +68,39 @@ export function AudioBubble({ uri, duration, mine }: { uri: string; duration: nu
   }
 
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, width: 220, paddingVertical: 2 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, width: 230, paddingVertical: 2 }}>
       <Pressable
         onPress={toggle} accessibilityRole="button" accessibilityLabel={status.playing ? "Pausa" : "Ascolta"}
-        style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" }}
+        style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: onAccent ? t.accentFg : t.accent, alignItems: "center", justifyContent: "center" }}
       >
-        <Text style={{ color: t.accentFg, fontSize: 15, fontWeight: "800", marginLeft: status.playing ? 0 : 2 }}>
-          {status.playing ? "❚❚" : "▶"}
-        </Text>
+        <Ionicons name={status.playing ? "pause" : "play"} size={17} color={onAccent ? t.accent : t.accentFg} style={{ marginLeft: status.playing ? 0 : 2 }} />
       </Pressable>
-      <View style={{ flex: 1, gap: 6 }}>
-        <View style={{ height: 4, borderRadius: 2, backgroundColor: mine ? "rgba(0,0,0,0.12)" : t.line }}>
-          <View style={{ height: 4, borderRadius: 2, width: `${progress * 100}%`, backgroundColor: t.accent }} />
-        </View>
-        <Text style={{ fontSize: 12, color: t.muted, fontVariant: ["tabular-nums"] }}>
-          {formatDuration(status.playing || status.currentTime > 0 ? status.currentTime * 1000 : total)}
-        </Text>
+      <View style={{ flex: 1, height: 28, flexDirection: "row", alignItems: "center", gap: 2 }}>
+        {bars.map((h, i) => (
+          <View
+            key={i}
+            style={{
+              flex: 1, height: 4 + h * 22, borderRadius: 2, backgroundColor: fg,
+              opacity: (i + 0.5) / bars.length <= progress ? 1 : 0.38,
+            }}
+          />
+        ))}
       </View>
+      <Text style={{ fontSize: 12.5, fontWeight: "600", color: fg, fontVariant: ["tabular-nums"], minWidth: 32, textAlign: "right" }}>
+        {formatDuration(status.playing || status.currentTime > 0 ? Math.max(0, total - status.currentTime * 1000) : total)}
+      </Text>
     </View>
   );
+}
+
+// A stable, natural-looking waveform for each voice note (0–1 heights).
+function waveform(seed: number, n: number) {
+  let x = Math.abs(seed * 9301 + 49297) % 233280 || 1;
+  const rnd = () => (x = (x * 9301 + 49297) % 233280) / 233280;
+  return Array.from({ length: n }, (_, i) => {
+    const envelope = Math.sin((Math.PI * (i + 1)) / (n + 1));
+    return Math.min(1, 0.25 + envelope * 0.55 + rnd() * 0.35);
+  });
 }
 
 export function FileBubble({ name, size, onOpen, onLongPress }: {

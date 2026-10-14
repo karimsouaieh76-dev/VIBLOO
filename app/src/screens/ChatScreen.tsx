@@ -3,6 +3,7 @@ import {
   ActivityIndicator, BackHandler, FlatList, KeyboardAvoidingView, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Clipboard from "expo-clipboard";
 import {
   RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState,
@@ -200,7 +201,8 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   }
 
   const statusOf = (m: ChatMessage): Status => m.local ?? messageStatus(c, me, m);
-  const showMic = !editing && !text.trim();
+  // Clear of the iPhone home bar, and never glued to the bottom edge.
+  const bottomGap = insets.bottom + 8;
 
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : "height"}>
@@ -215,11 +217,11 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
         </View>
         {onCall && !c.isGroup && (
           <>
-            <Pressable onPress={() => onCall("video")} hitSlop={8} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Videochiamata">
-              <Text style={s.callIcon}>📹</Text>
+            <Pressable onPress={() => onCall("audio")} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Chiamata vocale">
+              <Ionicons name="call" size={22} color={t.accent} />
             </Pressable>
-            <Pressable onPress={() => onCall("audio")} hitSlop={8} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Chiamata vocale">
-              <Text style={s.callIcon}>📞</Text>
+            <Pressable onPress={() => onCall("video")} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Videochiamata">
+              <Ionicons name="videocam" size={25} color={t.accent} />
             </Pressable>
           </>
         )}
@@ -281,29 +283,41 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       )}
 
       {recording ? (
-        <View style={[s.composer, s.recordBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          <Pressable onPress={() => stopRecording(false)} style={s.recCancel} accessibilityRole="button" accessibilityLabel="Annulla vocale">
-            <Text style={s.recCancelText}>Annulla</Text>
+        // Messenger-style recorder: bin on the left, a coloured bar with live
+        // level bars and the timer, send on the right.
+        <View style={[s.composer, { paddingBottom: bottomGap }]}>
+          <Pressable onPress={() => stopRecording(false)} style={s.iconBtn} accessibilityRole="button" accessibilityLabel="Annulla vocale">
+            <Ionicons name="trash" size={22} color={t.danger} />
           </Pressable>
-          <View style={s.recInfo}>
+          <View style={s.recBar}>
             <View style={s.recDot} />
+            <RecordingLevels t={t} />
             <Text style={s.recTime}>{formatDuration(recorderState.durationMillis)}</Text>
-            <Text style={s.recLabel}>Registrazione…</Text>
           </View>
-          <Pressable style={s.send} onPress={() => stopRecording(true)} accessibilityRole="button" accessibilityLabel="Invia vocale">
-            <Text style={s.sendIcon}>➤</Text>
+          <Pressable onPress={() => stopRecording(true)} style={s.iconBtn} accessibilityRole="button" accessibilityLabel="Invia vocale">
+            <Ionicons name="send" size={22} color={t.accent} />
           </Pressable>
         </View>
       ) : (
-        <View style={[s.composer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <View style={[s.composer, { paddingBottom: bottomGap }]}>
           {!editing && (
-            <Pressable style={s.attach} onPress={() => setAttachOpen(true)} accessibilityRole="button" accessibilityLabel="Allega">
-              <Text style={s.attachIcon}>＋</Text>
+            <Pressable style={s.iconBtn} onPress={() => setAttachOpen(true)} accessibilityRole="button" accessibilityLabel="Allega">
+              <Ionicons name="add-circle" size={26} color={t.accent} />
             </Pressable>
+          )}
+          {!editing && !text.trim() && (
+            <>
+              <Pressable style={s.iconBtn} onPress={() => attach(pickPhoto)} accessibilityRole="button" accessibilityLabel="Invia foto">
+                <Ionicons name="image" size={23} color={t.accent} />
+              </Pressable>
+              <Pressable style={s.iconBtn} onPress={startRecording} accessibilityRole="button" accessibilityLabel="Registra vocale">
+                <Ionicons name="mic" size={23} color={t.accent} />
+              </Pressable>
+            </>
           )}
           <TextInput
             ref={inputRef}
-            style={s.input} value={text} placeholder={editing ? "Nuovo testo" : "Messaggio"} placeholderTextColor={t.muted}
+            style={s.input} value={text} placeholder={editing ? "Nuovo testo" : "Aa"} placeholderTextColor={t.muted}
             multiline maxLength={4000}
             onChangeText={(v) => { setText(v); if (!editing) setTypingState(v.trim().length > 0); }}
             onKeyPress={(e) => {
@@ -315,15 +329,12 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
               }
             }}
           />
-          {showMic ? (
-            <Pressable style={s.send} onPress={startRecording} accessibilityRole="button" accessibilityLabel="Registra vocale">
-              <Text style={s.micIcon}>🎤</Text>
-            </Pressable>
-          ) : (
-            <Pressable style={s.send} onPress={submit} accessibilityRole="button" accessibilityLabel={editing ? "Salva modifica" : "Invia"}>
-              <Text style={s.sendIcon}>{editing ? "✓" : "➤"}</Text>
-            </Pressable>
-          )}
+          <Pressable
+            style={s.iconBtn} onPress={submit} disabled={!text.trim() && !editing}
+            accessibilityRole="button" accessibilityLabel={editing ? "Salva modifica" : "Invia"}
+          >
+            <Ionicons name={editing ? "checkmark-circle" : "send"} size={editing ? 28 : 22} color={text.trim() || editing ? t.accent : t.line} />
+          </Pressable>
         </View>
       )}
 
@@ -387,6 +398,7 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
   const a = m.attachment;
   const deleted = Boolean(m.deletedAt);
   const photo = !deleted && a != null && m.kind === "image";
+  const voice = !deleted && a != null && m.kind === "audio";
 
   return (
     <View style={[s.msgRow, first && { marginTop: 8 }, mine ? { justifyContent: "flex-end" } : null, m.local === "failed" && { marginBottom: 20 }]}>
@@ -395,7 +407,10 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
       )}
       <Pressable
         onLongPress={onMenu} delayLongPress={350}
-        style={[s.bubble, mine ? s.mine : s.theirs, first && (mine ? s.mineFirst : s.theirsFirst), photo && s.photoBubble]}
+        style={[
+          s.bubble, mine ? s.mine : s.theirs, first && (mine ? s.mineFirst : s.theirsFirst), photo && s.photoBubble,
+          voice && s.voiceBubble, voice && mine && { backgroundColor: t.accent },
+        ]}
         accessibilityHint={deleted ? undefined : "Tieni premuto per altre azioni"}
       >
         {showName && !mine && first && (
@@ -410,11 +425,11 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
         ) : (
           <>
             {a && m.kind === "image" && <PhotoThumb uri={url} width={a.width} height={a.height} onPress={onOpenPhoto} onLongPress={onMenu} />}
-            {a && m.kind === "audio" && <AudioBubble uri={url} duration={a.duration} mine={mine} />}
+            {a && m.kind === "audio" && <AudioBubble uri={url} duration={a.duration} seed={a.id || m.id} onAccent={mine} />}
             {a && m.kind === "file" && <FileBubble name={a.name} size={a.size} onOpen={onOpenFile} onLongPress={onMenu} />}
             <View style={[s.content, photo && { paddingHorizontal: 6, paddingTop: 4 }]}>
               {m.text ? <Text style={[s.text, mine && { color: t.mineFg }]} selectable>{m.text}</Text> : null}
-              <Meta m={m} mine={mine} status={status} t={t} />
+              <Meta m={m} mine={mine} status={status} t={t} onAccent={voice && mine} />
             </View>
           </>
         )}
@@ -430,13 +445,36 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
   );
 }
 
-function Meta({ m, mine, status, t }: { m: ChatMessage; mine: boolean; status: Status; t: Theme }) {
+function Meta({ m, mine, status, t, onAccent }: { m: ChatMessage; mine: boolean; status: Status; t: Theme; onAccent?: boolean }) {
   const s = styles(t);
+  const time = [s.time, onAccent && { color: t.accentFg, opacity: 0.8 }];
   return (
     <View style={s.meta}>
-      {m.editedAt && !m.deletedAt ? <Text style={s.time}>modificato</Text> : null}
-      <Text style={s.time}>{formatTime(m.createdAt)}</Text>
-      {mine && <Ticks status={status} size={12} />}
+      {m.editedAt && !m.deletedAt ? <Text style={time}>modificato</Text> : null}
+      <Text style={time}>{formatTime(m.createdAt)}</Text>
+      {mine && <Ticks status={status} size={12} onAccent={onAccent} />}
+    </View>
+  );
+}
+
+// Bars that bounce while recording, like Messenger's live waveform.
+function RecordingLevels({ t }: { t: Theme }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 120);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 3, overflow: "hidden", height: 24 }}>
+      {Array.from({ length: 28 }, (_, i) => (
+        <View
+          key={i}
+          style={{
+            width: 3, borderRadius: 2, backgroundColor: t.accentFg, opacity: 0.85,
+            height: 5 + Math.abs(Math.sin((i + tick) * 0.9) * Math.cos(i * 0.37 + tick * 0.21)) * 18,
+          }}
+        />
+      ))}
     </View>
   );
 }
@@ -452,7 +490,6 @@ const styles = (t: Theme) => StyleSheet.create({
   },
   back: { fontSize: 34, lineHeight: 36, color: t.accent, paddingRight: 2 },
   callBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  callIcon: { fontSize: 20 },
   callBubble: { gap: 2, paddingVertical: 8 },
   title: { fontSize: 17, fontWeight: "700", color: t.fg },
   subtitle: { fontSize: 12.5, color: t.muted, marginTop: 1 },
@@ -466,6 +503,7 @@ const styles = (t: Theme) => StyleSheet.create({
   day: { backgroundColor: t.panel, color: t.muted, fontSize: 12, fontWeight: "600", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, overflow: "hidden" },
   msgRow: { flexDirection: "row", marginTop: 2 },
   bubble: { maxWidth: "82%", borderRadius: 12, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 5 },
+  voiceBubble: { borderRadius: 22, paddingHorizontal: 8, paddingTop: 7, paddingBottom: 5 },
   photoBubble: { paddingHorizontal: 3, paddingTop: 3, paddingBottom: 4 },
   mine: { backgroundColor: t.mine },
   theirs: { backgroundColor: t.bubble },
@@ -490,21 +528,19 @@ const styles = (t: Theme) => StyleSheet.create({
   editLabel: { color: t.accent, fontWeight: "700", fontSize: 13 },
   editOld: { color: t.muted, fontSize: 13.5 },
   editClose: { color: t.muted, fontSize: 18, fontWeight: "700" },
-  composer: { flexDirection: "row", alignItems: "flex-end", gap: 6, paddingHorizontal: 8, paddingTop: 8, backgroundColor: t.chatBg },
-  attach: { width: 42, height: 46, alignItems: "center", justifyContent: "center" },
-  attachIcon: { fontSize: 26, color: t.accent, fontWeight: "600" },
-  input: {
-    flex: 1, maxHeight: 140, backgroundColor: t.bg, borderRadius: 22, paddingHorizontal: 16,
-    paddingTop: 11, paddingBottom: 11, fontSize: 16, color: t.fg, ...noOutline,
+  composer: {
+    flexDirection: "row", alignItems: "flex-end", gap: 2, paddingHorizontal: 6, paddingTop: 8,
+    backgroundColor: t.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line,
   },
-  send: { width: 46, height: 46, borderRadius: 23, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" },
-  sendIcon: { color: t.accentFg, fontSize: 19, marginLeft: 3, fontWeight: "700" },
-  micIcon: { fontSize: 20 },
-  recordBar: { alignItems: "center" },
-  recCancel: { paddingHorizontal: 10, height: 46, justifyContent: "center" },
-  recCancelText: { color: t.danger, fontWeight: "700", fontSize: 15 },
-  recInfo: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: t.bg, borderRadius: 22, height: 46, paddingHorizontal: 16 },
-  recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: t.danger },
-  recTime: { color: t.fg, fontSize: 16, fontWeight: "600", fontVariant: ["tabular-nums"] },
-  recLabel: { color: t.muted, fontSize: 14 },
+  iconBtn: { width: 38, height: 40, alignItems: "center", justifyContent: "center" },
+  input: {
+    flex: 1, maxHeight: 140, minHeight: 40, backgroundColor: t.panel, borderRadius: 20, paddingHorizontal: 14,
+    paddingTop: 9, paddingBottom: 9, fontSize: 16, color: t.fg, marginHorizontal: 4, ...noOutline,
+  },
+  recBar: {
+    flex: 1, height: 40, borderRadius: 20, backgroundColor: t.accent, flexDirection: "row", alignItems: "center",
+    gap: 10, paddingHorizontal: 14, marginHorizontal: 4,
+  },
+  recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#ff5a5a" },
+  recTime: { color: t.accentFg, fontSize: 14, fontWeight: "700", fontVariant: ["tabular-nums"] },
 });

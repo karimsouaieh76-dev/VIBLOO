@@ -1,6 +1,7 @@
 import { createElement, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Avatar } from "../components";
 import { formatDuration } from "../format";
 import type { Calls } from "../useCalls";
@@ -28,8 +29,10 @@ function MediaView({ stream, kind, muted, mirror, style }: {
   });
 }
 
-function RoundButton({ label, icon, onPress, color = "rgba(255,255,255,0.16)", active }: {
-  label: string; icon: string; onPress: () => void; color?: string; active?: boolean;
+type IconName = React.ComponentProps<typeof Ionicons>["name"];
+
+function RoundButton({ label, icon, onPress, color = "rgba(255,255,255,0.16)", active, rotate }: {
+  label: string; icon: IconName; onPress: () => void; color?: string; active?: boolean; rotate?: boolean;
 }) {
   return (
     <View style={styles.btnWrap}>
@@ -37,7 +40,10 @@ function RoundButton({ label, icon, onPress, color = "rgba(255,255,255,0.16)", a
         onPress={onPress} accessibilityRole="button" accessibilityLabel={label}
         style={({ pressed }) => [styles.btn, { backgroundColor: active ? "#f2fbf8" : color }, pressed && { opacity: 0.75 }]}
       >
-        <Text style={[styles.btnIcon, active && { color: "#0b1514" }]}>{icon}</Text>
+        <Ionicons
+          name={icon} size={28} color={active ? "#0b1514" : "#fff"}
+          style={rotate ? { transform: [{ rotate: "135deg" }] } : undefined}
+        />
       </Pressable>
       <Text style={styles.btnLabel}>{label}</Text>
     </View>
@@ -91,17 +97,17 @@ export function CallScreen({ calls }: { calls: Calls }) {
       <View style={[styles.controls, { paddingBottom: insets.bottom + 36 }]}>
         {call.phase === "incoming" ? (
           <>
-            <RoundButton label="Rifiuta" icon="✕" color="#d64545" onPress={calls.decline} />
-            <RoundButton label="Rispondi" icon={video ? "📹" : "📞"} color="#2fae6c" onPress={calls.accept} />
+            <RoundButton label="Rifiuta" icon="call" rotate color="#e0413d" onPress={calls.decline} />
+            <RoundButton label="Rispondi" icon={video ? "videocam" : "call"} color="#2fae6c" onPress={calls.accept} />
           </>
         ) : call.phase === "ended" ? null : (
           <>
-            <RoundButton label={call.muted ? "Riattiva" : "Muto"} icon={call.muted ? "🔇" : "🎤"} active={call.muted} onPress={calls.toggleMute} />
+            <RoundButton label={call.muted ? "Riattiva" : "Muto"} icon={call.muted ? "mic-off" : "mic"} active={call.muted} onPress={calls.toggleMute} />
             {video && (
-              <RoundButton label={call.cameraOff ? "Accendi" : "Video"} icon="📷" active={call.cameraOff} onPress={calls.toggleCamera} />
+              <RoundButton label={call.cameraOff ? "Accendi" : "Video"} icon={call.cameraOff ? "videocam-off" : "videocam"} active={call.cameraOff} onPress={calls.toggleCamera} />
             )}
-            {video && <RoundButton label="Gira" icon="🔄" onPress={calls.switchCamera} />}
-            <RoundButton label="Chiudi" icon="✕" color="#d64545" onPress={calls.hangup} />
+            {video && <RoundButton label="Gira" icon="camera-reverse" onPress={calls.switchCamera} />}
+            <RoundButton label="Chiudi" icon="call" rotate color="#e0413d" onPress={calls.hangup} />
           </>
         )}
       </View>
@@ -127,6 +133,5 @@ const styles = StyleSheet.create({
   },
   btnWrap: { alignItems: "center", gap: 6 },
   btn: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
-  btnIcon: { color: "#fff", fontSize: 24, fontWeight: "700" },
   btnLabel: { color: "rgba(242,251,248,0.85)", fontSize: 12.5 },
 });

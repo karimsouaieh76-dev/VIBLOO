@@ -203,11 +203,11 @@ export async function createStore(driver) {
     },
 
     // ---------- messages ----------
-    async addMessage(conversationId, userId, text, attachment = null) {
+    async addMessage(conversationId, userId, text, attachment = null, kind = null) {
       const { id } = await one(
         `INSERT INTO chat_messages (conversation_id, user_id, kind, text, attachment_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-        [conversationId, userId, attachment ? kindFor(attachment.mime) : "text", text, attachment?.id ?? null, Date.now()]);
+        [conversationId, userId, kind ?? (attachment ? kindFor(attachment.mime) : "text"), text, attachment?.id ?? null, Date.now()]);
       // The sender has obviously read everything up to their own message.
       await store.markRead(conversationId, userId, id);
       return store.getMessage(id);

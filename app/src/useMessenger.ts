@@ -21,6 +21,7 @@ let tempIds = -1;
 // presence and typing indicators in sync with the server.
 export function useMessenger(serverUrl: string, token: string, me: User, api: Api) {
   const socketRef = useRef<Socket | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -69,6 +70,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   useEffect(() => {
     const socket = io(serverUrl, { auth: { token }, transports: ["websocket"] });
     socketRef.current = socket;
+    setSocket(socket);
 
     socket.on("connect", async () => {
       setConnected(true);
@@ -152,6 +154,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     return () => {
       socket.removeAllListeners();
       socket.close();
+      setSocket(null);
       Object.values(typingTimers.current).forEach(clearTimeout);
     };
   }, [serverUrl, token, api, me.id, refreshConversations, markRead]);
@@ -256,7 +259,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   }, [totalUnread]);
 
   return {
-    connected, loaded, conversations, messages, typing, totalUnread,
+    socket, connected, loaded, conversations, messages, typing, totalUnread,
     openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
   };
 }

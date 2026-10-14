@@ -9,7 +9,17 @@ App di messaggistica istantanea, in stile WhatsApp:
 - messaggi mostrati subito con l'orologio e, se la rete cade, pulsante "Riprova";
 - **foto** (ridotte automaticamente), **messaggi vocali** e **file** fino a 15 MB;
 - **modifica** (entro 24 ore) ed **eliminazione per tutti**: tieni premuto un tuo messaggio;
-- **notifiche push** quando l'app è chiusa o in secondo piano.
+- **notifiche push** quando l'app è chiusa o in secondo piano;
+- **chiamate vocali e videochiamate** 1 a 1 (WebRTC): suoneria, muto, videocamera on/off, cambio
+  fotocamera, notifica di chiamata in arrivo e storico delle chiamate nella chat.
+
+### Chiamate
+
+Voce e video viaggiano direttamente tra i due dispositivi; il server fa solo squillare e
+mette in contatto. Funzionano nella versione web/installata (non in Expo Go). Su alcune reti
+mobili un collegamento diretto è impossibile: in quel caso serve un server **TURN** che faccia
+da ponte. Se ne crei uno gratuito (es. Metered.ca o Cloudflare Calls) e imposti `TURN_URLS`,
+`TURN_USERNAME` e `TURN_CREDENTIAL`, le chiamate funzionano su qualsiasi rete.
 
 ### Notifiche
 
@@ -94,6 +104,7 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | `DB_FILE`    | `vibloo.db`    | file SQLite                                |
 | `JWT_SECRET` | generata        | se manca viene creata e salvata (nel database online, o accanto al file SQLite) |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
+| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | — | server TURN per le chiamate (facoltativo, `TURN_URLS` separati da virgola) |
 
 ## Test
 
@@ -115,10 +126,13 @@ cd app && npm run typecheck
 | POST   | `/api/conversations/:id/attachments`      | carica un file (corpo grezzo, `x-file-name`)  |
 | GET    | `/api/attachments/:id?token=`             | scarica un file (con supporto `Range`)        |
 | GET/POST | `/api/push/key`, `/api/push/subscribe`, `/api/push/unsubscribe` | notifiche push |
+| GET    | `/api/call-config`                        | server STUN/TURN per le chiamate              |
 
 Socket.IO (token in `auth.token`). Il client invia `message:send`, `message:edit`, `message:delete`
-(con ack), `delivered`, `read`, `typing` e `visibility`; il server invia `message:new`,
-`message:update`, `conversation:new`, `receipt`, `typing` e `presence`.
+(con ack), `delivered`, `read`, `typing`, `visibility` e per le chiamate `call:invite`, `call:accept`,
+`call:decline`, `call:hangup`, `call:signal`; il server invia `message:new`, `message:update`,
+`conversation:new`, `receipt`, `typing`, `presence`, `call:incoming`, `call:accepted`, `call:signal`
+e `call:ended`.
 
 ## Pubblicare sugli store
 

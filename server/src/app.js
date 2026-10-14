@@ -8,6 +8,7 @@ import { Server } from "socket.io";
 import { openDb } from "./db/index.js";
 import { hashPassword, verifyPassword, makeTokens } from "./auth.js";
 import { createPush, notificationText } from "./push.js";
+import { createCalls, iceServers } from "./calls.js";
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
 const MAX_MESSAGE = 4000;
@@ -190,6 +191,8 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     res.send(file.data);
   });
 
+  app.get("/api/call-config", requireUser, (_req, res) => res.json({ iceServers: iceServers() }));
+
   app.get("/api/push/key", requireUser, (_req, res) => res.json({ publicKey: push.publicKey }));
   app.post("/api/push/subscribe", requireUser, async (req, res) => {
     const sub = req.body?.subscription;
@@ -234,6 +237,8 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       await push.send(userIds, { ...notificationText(message, meta), conversationId, tag: `c${conversationId}` });
     })().catch((err) => console.error(err));
   };
+
+  const calls = createCalls({ io, db, push, isLooking, userRoom });
 
   io.use((socket, next) => {
     const user = tokens.verify(socket.handshake.auth?.token);
@@ -284,6 +289,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     const ownMessage = async (messageId) => {
       const m = await db.getMessage(toId(messageId) ?? 0);
       if (!m || m.userId !== user.id) return { error: "Puoi modificare solo i tuoi messaggi." };
+      if (m.kind === "call") return { error: "Le chiamate non si possono modificare." };
       if (m.deletedAt) return { error: "Il messaggio è già stato eliminato." };
       return { message: m };
     };
@@ -307,6 +313,8 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       reply({ message: updated });
       await toMembers(updated.conversationId, "message:update", updated);
     });
+
+    calls.attach(socket, user, handle);
 
     handle("visibility", async ({ visible: on }) => {
       const set = visible.get(user.id) ?? new Set();
@@ -343,5 +351,5 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     });
   });
 
-  return { app, httpServer, io, db };
+  return { app, httpServer, io, db, calls };
 }

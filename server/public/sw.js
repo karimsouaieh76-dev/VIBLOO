@@ -15,6 +15,9 @@ self.addEventListener("push", (event) => {
       icon: "/icon-192.png",
       badge: "/icon-192.png",
       data: { conversationId: data.conversationId },
+      // Incoming calls stay on screen and vibrate like a phone call.
+      requireInteraction: Boolean(data.call),
+      vibrate: data.call ? [500, 250, 500, 250, 500] : undefined,
     }),
   );
 });

@@ -12,7 +12,7 @@ export type Attachment = {
   height: number | null;
   duration: number | null; // milliseconds, voice notes only
 };
-export type MessageKind = "text" | "image" | "audio" | "file";
+export type MessageKind = "text" | "image" | "audio" | "file" | "call";
 export type Message = {
   id: number;
   conversationId: number;
@@ -111,6 +111,7 @@ export function createApi(baseUrl: string, token?: string) {
     attachmentUrl: (id: number, download = false) =>
       `${root}/api/attachments/${id}?token=${encodeURIComponent(token ?? "")}${download ? "&download=1" : ""}`,
 
+    callConfig: () => request<{ iceServers: RTCIceServer[] }>("/api/call-config"),
     pushKey: () => request<{ publicKey: string }>("/api/push/key"),
     pushSubscribe: (subscription: unknown) => post<{ ok: true }>("/api/push/subscribe", { subscription }),
     pushUnsubscribe: (endpoint: string) => post<{ ok: true }>("/api/push/unsubscribe", { endpoint }),

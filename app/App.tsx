@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ApiError, Conversation, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
@@ -11,6 +11,9 @@ import { LoginScreen } from "./src/screens/LoginScreen";
 import { ChatsScreen } from "./src/screens/ChatsScreen";
 import { NewChatScreen } from "./src/screens/NewChatScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
+import { CallScreen } from "./src/screens/CallScreen";
+import { callsSupported, useCalls } from "./src/useCalls";
+import { otherMembers } from "./src/format";
 
 type Session = { serverUrl: string; token: string; user: User };
 
@@ -80,6 +83,7 @@ type Screen = { name: "chats" } | { name: "new" } | { name: "chat"; conversation
 function SignedIn({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const api = useMemo(() => createApi(session.serverUrl, session.token), [session]);
   const messenger = useMessenger(session.serverUrl, session.token, session.user, api);
+  const calls = useCalls(messenger.socket, api);
   const [screen, setScreen] = useState<Screen>({ name: "chats" });
   const home = useCallback(() => setScreen({ name: "chats" }), []);
   const [wanted, setWanted] = useState<number | null>(initialChatFromUrl);
@@ -103,22 +107,46 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
     setWanted(null);
   }, [wanted, messenger.loaded, messenger.conversations]);
 
+  let content: React.ReactNode;
   if (screen.name === "chat") {
-    return <ChatScreen me={session.user} api={api} messenger={messenger} conversation={screen.conversation} onBack={home} />;
-  }
-  if (screen.name === "new") {
-    return (
+    const conversation = screen.conversation;
+    const onCall = callsSupported()
+      ? (media: "audio" | "video") => {
+          const peer = otherMembers(conversation, session.user)[0];
+          if (peer) calls.startCall(conversation.id, { id: peer.id, username: peer.username }, media);
+        }
+      : undefined;
+    content = <ChatScreen me={session.user} api={api} messenger={messenger} conversation={conversation} onBack={home} onCall={onCall} />;
+  } else if (screen.name === "new") {
+    content = (
       <NewChatScreen
         api={api} onBack={home}
         onOpened={(conversation) => { messenger.addConversation(conversation); setScreen({ name: "chat", conversation }); }}
       />
     );
+  } else {
+    content = (
+      <ChatsScreen
+        me={session.user} api={api} messenger={messenger} onLogout={onLogout}
+        onOpen={(conversation) => setScreen({ name: "chat", conversation })}
+        onNewChat={() => setScreen({ name: "new" })}
+      />
+    );
   }
+
   return (
-    <ChatsScreen
-      me={session.user} api={api} messenger={messenger} onLogout={onLogout}
-      onOpen={(conversation) => setScreen({ name: "chat", conversation })}
-      onNewChat={() => setScreen({ name: "new" })}
-    />
+    <View style={{ flex: 1 }}>
+      {content}
+      {calls.error ? (
+        <Pressable onPress={calls.clearError} style={callErrorStyle} accessibilityRole="alert">
+          <Text style={{ color: "#fff", fontSize: 14 }}>{calls.error}  ✕</Text>
+        </Pressable>
+      ) : null}
+      <CallScreen calls={calls} />
+    </View>
   );
 }
+
+const callErrorStyle = {
+  position: "absolute" as const, left: 16, right: 16, bottom: 90, padding: 14, borderRadius: 12, backgroundColor: "#a33a2a",
+};

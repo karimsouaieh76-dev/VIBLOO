@@ -65,6 +65,7 @@ export function messagePreview(m: Message, me: User) {
   if (m.kind === "image") return m.text ? `📷 ${m.text}` : "📷 Foto";
   if (m.kind === "audio") return `🎤 Messaggio vocale (${formatDuration(a?.duration)})`;
   if (m.kind === "file") return `📎 ${a?.name ?? "File"}`;
+  if (m.kind === "call") return callLabel(m, me);
   return m.text;
 }
 
@@ -79,4 +80,25 @@ export function messageStatus(c: Conversation, me: User, m: Message): Status {
 
 export function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
+}
+
+export type CallLog = { media: "audio" | "video"; status: "completed" | "missed" | "declined"; duration: number };
+
+export function parseCall(m: Message): CallLog {
+  try {
+    return JSON.parse(m.text) as CallLog;
+  } catch {
+    return { media: "audio", status: "completed", duration: 0 };
+  }
+}
+
+// "📞 Chiamata vocale · 2:31", "📹 Videochiamata persa", …
+export function callLabel(m: Message, me: User) {
+  const c = parseCall(m);
+  const mine = m.userId === me.id;
+  const icon = c.media === "video" ? "📹" : "📞";
+  const what = c.media === "video" ? "Videochiamata" : "Chiamata vocale";
+  if (c.status === "completed") return `${icon} ${what} · ${formatDuration(c.duration * 1000)}`;
+  if (c.status === "declined") return `${icon} ${what} rifiutata`;
+  return mine ? `${icon} ${what} senza risposta` : `${icon} ${c.media === "video" ? "Videochiamata persa" : "Chiamata persa"}`;
 }

@@ -11,12 +11,16 @@ import type { Api, Conversation, LocalFile, User } from "../api";
 import type { ChatMessage, Messenger } from "../useMessenger";
 import { ActionSheet, AudioBubble, Avatar, FileBubble, PhotoThumb, PhotoViewer, SheetOption, Ticks } from "../components";
 import {
-  conversationTitle, formatDay, formatDuration, formatLastSeen, formatTime, messageStatus, otherMembers, Status,
+  callLabel, conversationTitle, formatDay, formatDuration, formatLastSeen, formatTime, messageStatus, otherMembers,
+  parseCall, Status,
 } from "../format";
 import { pickFile, pickPhoto, webRecordingMime } from "../media";
 import { avatarColor, Theme, useTheme } from "../theme";
 
-type Props = { me: User; api: Api; messenger: Messenger; conversation: Conversation; onBack: () => void };
+type Props = {
+  me: User; api: Api; messenger: Messenger; conversation: Conversation; onBack: () => void;
+  onCall?: (media: "audio" | "video") => void;
+};
 
 type Row =
   | { kind: "day"; key: string; label: string }
@@ -49,7 +53,7 @@ function buildRows(list: ChatMessage[]): Row[] {
   return rows.reverse();
 }
 
-export function ChatScreen({ me, api, messenger, conversation: initial, onBack }: Props) {
+export function ChatScreen({ me, api, messenger, conversation: initial, onBack, onCall }: Props) {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
@@ -209,6 +213,16 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack }
             <Text style={[s.subtitle, typers.length > 0 && { color: t.online, fontWeight: "600" }]} numberOfLines={1}>{subtitle}</Text>
           ) : null}
         </View>
+        {onCall && !c.isGroup && (
+          <>
+            <Pressable onPress={() => onCall("video")} hitSlop={8} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Videochiamata">
+              <Text style={s.callIcon}>📹</Text>
+            </Pressable>
+            <Pressable onPress={() => onCall("audio")} hitSlop={8} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Chiamata vocale">
+              <Text style={s.callIcon}>📞</Text>
+            </Pressable>
+          </>
+        )}
       </View>
       {!messenger.connected && <Text style={s.offline}>Connessione persa: i messaggi partiranno quando torna la rete.</Text>}
 
@@ -237,7 +251,9 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack }
             renderItem={({ item }) => item.kind === "day"
               ? <View style={s.dayWrap}><Text style={s.day}>{item.label}</Text></View>
               : (
-                <Bubble
+                item.m.kind === "call" && !item.m.deletedAt ? (
+                  <CallBubble m={item.m} me={me} t={t} onPress={onCall && !c.isGroup ? () => onCall(parseCall(item.m).media) : undefined} />
+                ) : <Bubble
                   m={item.m} first={item.first} mine={item.m.userId === me.id} showName={c.isGroup}
                   status={statusOf(item.m)} t={t} url={fileUrl(item.m)}
                   onOpenPhoto={() => setViewer({ uri: fileUrl(item.m), download: item.m.local ? undefined : fileUrl(item.m, true) })}
@@ -344,6 +360,25 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack }
   );
 }
 
+// A call in the history: tap it to call back.
+function CallBubble({ m, me, t, onPress }: { m: ChatMessage; me: User; t: Theme; onPress?: () => void }) {
+  const s = styles(t);
+  const mine = m.userId === me.id;
+  const c = parseCall(m);
+  const missed = c.status === "missed" && !mine;
+  return (
+    <View style={[s.msgRow, { marginTop: 8 }, mine ? { justifyContent: "flex-end" } : null]}>
+      <Pressable
+        onPress={onPress} disabled={!onPress} accessibilityRole="button" accessibilityHint={onPress ? "Richiama" : undefined}
+        style={[s.bubble, mine ? s.mine : s.theirs, s.callBubble]}
+      >
+        <Text style={[s.text, mine && { color: t.mineFg }, missed && { color: t.danger, fontWeight: "600" }]}>{callLabel(m, me)}</Text>
+        <Text style={s.time}>{formatTime(m.createdAt)}{onPress ? "  ·  Richiama" : ""}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenFile, onMenu, onRetry, onDiscard }: {
   m: ChatMessage; first: boolean; mine: boolean; showName: boolean; status: Status; t: Theme; url: string;
   onOpenPhoto: () => void; onOpenFile: () => void; onMenu: () => void; onRetry: () => void; onDiscard: () => void;
@@ -416,6 +451,9 @@ const styles = (t: Theme) => StyleSheet.create({
     backgroundColor: t.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line,
   },
   back: { fontSize: 34, lineHeight: 36, color: t.accent, paddingRight: 2 },
+  callBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  callIcon: { fontSize: 20 },
+  callBubble: { gap: 2, paddingVertical: 8 },
   title: { fontSize: 17, fontWeight: "700", color: t.fg },
   subtitle: { fontSize: 12.5, color: t.muted, marginTop: 1 },
   offline: { backgroundColor: t.accentSoft, color: t.fg, fontSize: 13, textAlign: "center", paddingVertical: 6, paddingHorizontal: 12 },

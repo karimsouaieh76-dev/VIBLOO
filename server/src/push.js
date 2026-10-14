@@ -40,6 +40,7 @@ export async function createPush(db) {
 
 export function notificationText(message, conversation) {
   const att = message.attachment;
+  if (message.kind === "call") return { title: message.username, body: "📞 Chiamata" };
   let body = message.text;
   if (att) {
     const label = message.kind === "image" ? "📷 Foto" : message.kind === "audio" ? "🎤 Messaggio vocale" : `📎 ${att.name}`;

@@ -208,7 +208,7 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Torna alle chat"><Text style={s.back}>‹</Text></Pressable>
-        <Avatar name={title} id={others[0]?.id ?? c.id} size={40} group={c.isGroup} />
+        <Avatar name={title} id={others[0]?.id ?? c.id} size={40} group={c.isGroup} photo={c.isGroup ? null : others[0]?.avatarAt} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={s.title} numberOfLines={1}>{title}</Text>
           {subtitle ? (

@@ -124,7 +124,7 @@ export function NewChatScreen({ api, onBack, onOpened }: Props) {
               style={({ pressed }) => [s.row, pressed && { backgroundColor: t.accentSoft }]}
               onPress={() => (groupMode ? toggle(item) : openDirect(item))} disabled={busy}
             >
-              <Avatar name={item.username} id={item.id} size={44} online={item.online} />
+              <Avatar name={item.username} id={item.id} size={44} online={item.online} photo={item.avatarAt} />
               <View style={{ flex: 1 }}>
                 <Text style={s.name}>{item.username}</Text>
                 {formatLastSeen(item) ? <Text style={s.seen}>{formatLastSeen(item)}</Text> : null}

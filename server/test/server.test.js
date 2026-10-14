@@ -235,3 +235,39 @@ test("senza JWT_SECRET la chiave viene creata una volta e conservata nel databas
   assert.equal(await second.db.getSetting("jwt_secret"), key);
   second.io.close(); await second.db.close();
 });
+
+test("foto profilo", async () => {
+  const p = await register("paola");
+  const q = await register("quirino");
+  const sq = await socketFor(q.token);
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const put = (token, body, type) => fetch(`${base}/api/me/avatar`, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": type }, body,
+  }).then(async (r) => ({ status: r.status, ...(await r.json()) }));
+
+  assert.equal((await put(p.token, "ciao", "text/plain")).status, 400);
+  assert.equal((await put(p.token, Buffer.alloc(3 * 1024 * 1024), "image/png")).status, 413);
+
+  const live = next(sq, "profile");
+  const saved = await put(p.token, png, "image/png");
+  assert.equal(saved.status, 200);
+  assert.deepEqual(await live, { userId: p.user.id, avatarAt: saved.avatarAt });
+
+  const img = await fetch(`${base}/api/users/${p.user.id}/avatar?token=${q.token}&v=${saved.avatarAt}`);
+  assert.equal(img.status, 200);
+  assert.equal(img.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await img.arrayBuffer()), png);
+  assert.equal((await fetch(`${base}/api/users/${p.user.id}/avatar`)).status, 401);
+
+  assert.equal((await call("GET", "/api/me", p.token)).user.avatarAt, saved.avatarAt);
+  const found = await call("GET", "/api/users?q=paola", q.token);
+  assert.equal(found.users[0].avatarAt, saved.avatarAt);
+  await call("POST", "/api/conversations", q.token, { userId: p.user.id });
+  const list = await call("GET", "/api/conversations", q.token);
+  assert.equal(list.conversations[0].members.find((m) => m.id === p.user.id).avatarAt, saved.avatarAt);
+
+  const removed = await fetch(`${base}/api/me/avatar`, { method: "DELETE", headers: { authorization: `Bearer ${p.token}` } });
+  assert.equal(removed.status, 200);
+  assert.equal((await fetch(`${base}/api/users/${p.user.id}/avatar?token=${q.token}`)).status, 404);
+  assert.equal((await call("GET", "/api/me", p.token)).user.avatarAt, null);
+});

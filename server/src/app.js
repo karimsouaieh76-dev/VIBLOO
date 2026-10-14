@@ -57,7 +57,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
   app.use(cors());
   // JSON bodies everywhere except file uploads, which arrive as raw bytes.
   const json = express.json({ limit: "32kb" });
-  app.use((req, res, next) => (req.path.endsWith("/attachments") ? next() : json(req, res, next)));
+  app.use((req, res, next) => (req.path.endsWith("/attachments") || req.path === "/api/me/avatar" ? next() : json(req, res, next)));
 
   // Token from the Authorization header, or from ?token= for <img>/<audio> sources.
   const requireUser = (req, res, next) => {
@@ -92,13 +92,38 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       return res.status(401).json({ error: "Nome utente o password non corretti." });
     }
     const user = { id: row.id, username: row.username };
-    res.json({ token: tokens.sign(user), user });
+    res.json({ token: tokens.sign(user), user: { ...user, avatarAt: row.avatar_at ?? null } });
   });
 
   app.get("/api/me", requireUser, async (req, res) => {
     const user = await db.findUserById(req.user.id);
     if (!user) return res.status(401).json({ error: "Account non trovato." });
-    res.json({ user: { id: user.id, username: user.username } });
+    res.json({ user: { id: user.id, username: user.username, avatarAt: user.avatarAt ?? null } });
+  });
+
+  // Profile photo: a JPEG/PNG/WebP up to 2 MB (the app sends a 512 px square).
+  app.put("/api/me/avatar", requireUser, express.raw({ type: () => true, limit: 2 * 1024 * 1024 }), async (req, res) => {
+    const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) {
+      return res.status(400).json({ error: "La foto profilo deve essere un'immagine JPEG, PNG o WebP." });
+    }
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "L'immagine è vuota." });
+    const avatarAt = await db.setAvatar(req.user.id, mime, req.body);
+    io.emit("profile", { userId: req.user.id, avatarAt });
+    res.json({ avatarAt });
+  });
+
+  app.delete("/api/me/avatar", requireUser, async (req, res) => {
+    await db.removeAvatar(req.user.id);
+    io.emit("profile", { userId: req.user.id, avatarAt: null });
+    res.json({ avatarAt: null });
+  });
+
+  app.get("/api/users/:id/avatar", requireUser, async (req, res) => {
+    const photo = await db.getAvatar(toId(req.params.id) ?? 0);
+    if (!photo) return res.status(404).json({ error: "Nessuna foto profilo." });
+    res.set({ "Content-Type": photo.mime, "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff" });
+    res.send(photo.data);
   });
 
   app.get("/api/users", requireUser, async (req, res) => {
@@ -229,6 +254,9 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
 
   // Unexpected errors (e.g. database unreachable) get a readable message.
   app.use((err, _req, res, _next) => {
+    if (err?.type === "entity.too.large") {
+      return res.status(413).json({ error: "Il file è troppo grande." });
+    }
     console.error(err);
     res.status(500).json({ error: "Errore del server. Riprova tra poco." });
   });

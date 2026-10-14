@@ -22,6 +22,7 @@ let tempIds = -1;
 export function useMessenger(serverUrl: string, token: string, me: User, api: Api) {
   const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [myAvatarAt, setMyAvatarAt] = useState<number | null>(me.avatarAt ?? null);
   const [connected, setConnected] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -141,6 +142,14 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
         ...c,
         members: c.members.map((m) => m.id !== p.userId ? m : { ...m, online: p.online, lastSeen: p.lastSeen ?? m.lastSeen }),
       } : c)));
+
+    // Someone changed their profile photo.
+    socket.on("profile", ({ userId, avatarAt }: { userId: number; avatarAt: number | null }) => {
+      setConversations((list) => list.map((c) => c.members.some((m) => m.id === userId)
+        ? { ...c, members: c.members.map((m) => (m.id === userId ? { ...m, avatarAt } : m)) }
+        : c));
+      if (userId === me.id) setMyAvatarAt(avatarAt);
+    });
 
     socket.on("typing", ({ conversationId, user, typing: on }: { conversationId: number; user: User; typing: boolean }) => {
       const key = `${conversationId}:${user.id}`;
@@ -273,7 +282,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   }, [totalUnread]);
 
   return {
-    socket, connected, loaded, conversations, messages, typing, totalUnread,
+    socket, myAvatarAt, setMyAvatarAt, connected, loaded, conversations, messages, typing, totalUnread,
     openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
   };
 }

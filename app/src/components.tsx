@@ -1,24 +1,38 @@
+import { useState } from "react";
 import { Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { useAvatarUrl } from "./avatars";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { formatDuration, formatSize, initials, Status } from "./format";
 import { avatarColor, Theme, useTheme } from "./theme";
 
-export function Avatar({ name, id, size = 48, online, group }: {
+export function Avatar({ name, id, size = 48, online, group, photo }: {
   name: string; id: number; size?: number; online?: boolean; group?: boolean;
+  photo?: number | null; // when the profile photo last changed, or nothing
 }) {
   const t = useTheme();
+  const avatarUrl = useAvatarUrl();
+  const [broken, setBroken] = useState<number | null>(null);
   const dot = Math.max(10, Math.round(size / 4));
+  const showPhoto = !group && photo && avatarUrl && broken !== photo;
   return (
     <View style={{ width: size, height: size }}>
-      <View style={{
-        width: size, height: size, borderRadius: size / 2, backgroundColor: group ? t.accent : avatarColor(id),
-        alignItems: "center", justifyContent: "center",
-      }}>
-        <Text style={{ color: group ? t.accentFg : "#fff", fontWeight: "700", fontSize: size * 0.38 }}>
-          {group ? "#" : initials(name)}
-        </Text>
-      </View>
+      {showPhoto ? (
+        <Image
+          source={{ uri: avatarUrl(id, photo) }} accessibilityLabel={`Foto di ${name}`}
+          style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: avatarColor(id) }}
+          onError={() => setBroken(photo)}
+        />
+      ) : (
+        <View style={{
+          width: size, height: size, borderRadius: size / 2, backgroundColor: group ? t.accent : avatarColor(id),
+          alignItems: "center", justifyContent: "center",
+        }}>
+          <Text style={{ color: group ? t.accentFg : "#fff", fontWeight: "700", fontSize: size * 0.38 }}>
+            {group ? "#" : initials(name)}
+          </Text>
+        </View>
+      )}
       {online && (
         <View style={{
           position: "absolute", right: 0, bottom: 0, width: dot, height: dot, borderRadius: dot / 2,

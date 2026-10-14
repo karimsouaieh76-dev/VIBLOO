@@ -10,6 +10,8 @@ import { useMessenger } from "./src/useMessenger";
 import { LoginScreen } from "./src/screens/LoginScreen";
 import { ChatsScreen } from "./src/screens/ChatsScreen";
 import { NewChatScreen } from "./src/screens/NewChatScreen";
+import { ProfileScreen } from "./src/screens/ProfileScreen";
+import { AvatarContext } from "./src/avatars";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { CallScreen } from "./src/screens/CallScreen";
 import { callsSupported, useCalls } from "./src/useCalls";
@@ -78,7 +80,7 @@ function initialChatFromUrl(): number | null {
   return id || null;
 }
 
-type Screen = { name: "chats" } | { name: "new" } | { name: "chat"; conversation: Conversation };
+type Screen = { name: "chats" } | { name: "new" } | { name: "profile" } | { name: "chat"; conversation: Conversation };
 
 function SignedIn({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const api = useMemo(() => createApi(session.serverUrl, session.token), [session]);
@@ -113,10 +115,17 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
     const onCall = callsSupported()
       ? (media: "audio" | "video") => {
           const peer = otherMembers(conversation, session.user)[0];
-          if (peer) calls.startCall(conversation.id, { id: peer.id, username: peer.username }, media);
+          if (peer) calls.startCall(conversation.id, { id: peer.id, username: peer.username, avatarAt: peer.avatarAt }, media);
         }
       : undefined;
     content = <ChatScreen me={session.user} api={api} messenger={messenger} conversation={conversation} onBack={home} onCall={onCall} />;
+  } else if (screen.name === "profile") {
+    content = (
+      <ProfileScreen
+        me={session.user} api={api} avatarAt={messenger.myAvatarAt}
+        onAvatarChanged={messenger.setMyAvatarAt} onBack={home} onLogout={onLogout}
+      />
+    );
   } else if (screen.name === "new") {
     content = (
       <NewChatScreen
@@ -127,7 +136,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
   } else {
     content = (
       <ChatsScreen
-        me={session.user} api={api} messenger={messenger} onLogout={onLogout}
+        me={session.user} api={api} messenger={messenger} onProfile={() => setScreen({ name: "profile" })}
         onOpen={(conversation) => setScreen({ name: "chat", conversation })}
         onNewChat={() => setScreen({ name: "new" })}
       />
@@ -135,6 +144,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
   }
 
   return (
+    <AvatarContext.Provider value={api.avatarUrl}>
     <View style={{ flex: 1 }}>
       {content}
       {calls.error ? (
@@ -144,6 +154,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
       ) : null}
       <CallScreen calls={calls} />
     </View>
+    </AvatarContext.Provider>
   );
 }
 

@@ -81,7 +81,7 @@ export function CallScreen({ calls }: { calls: Calls }) {
       )}
 
       <View style={[styles.top, { paddingTop: insets.top + 32 }, remoteHasVideo && styles.topOverVideo]}>
-        {!remoteHasVideo && <Avatar name={call.peer.username} id={call.peer.id} size={112} />}
+        {!remoteHasVideo && <Avatar name={call.peer.username} id={call.peer.id} size={112} photo={call.peer.avatarAt} />}
         <Text style={styles.name} numberOfLines={1}>{call.peer.username}</Text>
         <Text style={styles.status} accessibilityLiveRegion="polite">{status}</Text>
       </View>

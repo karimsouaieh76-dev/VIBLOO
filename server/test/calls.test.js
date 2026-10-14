@@ -54,7 +54,7 @@ test("videochiamata: squillo, risposta, scambio dati, fine e storico", async () 
   const { callId, to } = await sa.emitWithAck("call:invite", { conversationId: conv, media: "video" });
   assert.equal(to.username, b.user.username);
   const incoming = await ringing;
-  assert.deepEqual(incoming, { callId, conversationId: conv, media: "video", from: { id: a.user.id, username: a.user.username } });
+  assert.deepEqual(incoming, { callId, conversationId: conv, media: "video", from: { id: a.user.id, username: a.user.username, avatarAt: null } });
 
   const accepted = next(sa, "call:accepted");
   assert.equal((await sb.emitWithAck("call:accept", { callId })).ok, true);

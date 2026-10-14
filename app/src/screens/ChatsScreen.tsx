@@ -14,10 +14,10 @@ type Props = {
   messenger: Messenger;
   onOpen: (c: Conversation) => void;
   onNewChat: () => void;
-  onLogout: () => void;
+  onProfile: () => void;
 };
 
-export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }: Props) {
+export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }: Props) {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
@@ -69,7 +69,9 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }:
     <View style={[s.root, { paddingTop: insets.top }]}>
       <View style={s.header}>
         <Text style={s.brand}>Vibloo</Text>
-        <Pressable onPress={onLogout} hitSlop={10} accessibilityRole="button"><Text style={s.link}>Esci</Text></Pressable>
+        <Pressable onPress={onProfile} hitSlop={10} accessibilityRole="button" accessibilityLabel="Profilo">
+          <Avatar name={me.username} id={me.id} size={38} photo={messenger.myAvatarAt} />
+        </Pressable>
       </View>
       {!messenger.connected && <Text style={s.offline}>In attesa di connessione…</Text>}
       {push === "default" && (
@@ -159,7 +161,7 @@ function Row({ c, me, typing, onPress, t }: { c: Conversation; me: User; typing:
 
   return (
     <Pressable style={({ pressed }) => [s.row, pressed && { backgroundColor: t.accentSoft }]} onPress={onPress}>
-      <Avatar name={title} id={other?.id ?? c.id} online={other?.online} group={c.isGroup} />
+      <Avatar name={title} id={other?.id ?? c.id} online={other?.online} group={c.isGroup} photo={other?.avatarAt} />
       <View style={s.rowBody}>
         <View style={s.rowTop}>
           <Text style={s.title} numberOfLines={1}>{title}</Text>

@@ -37,3 +37,18 @@ export function webRecordingMime() {
   if (Platform.OS !== "web" || typeof MediaRecorder === "undefined") return undefined;
   return ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t));
 }
+
+// Profile photo: the centre square of the picture, 512 × 512 JPEG.
+export async function pickAvatar(): Promise<LocalFile | null> {
+  const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 1 });
+  if (res.canceled || !res.assets[0]) return null;
+  const a = res.assets[0];
+  const side = Math.min(a.width, a.height);
+  const ctx = ImageManipulator.manipulate(a.uri);
+  if (a.width && a.height && a.width !== a.height) {
+    ctx.crop({ originX: Math.round((a.width - side) / 2), originY: Math.round((a.height - side) / 2), width: side, height: side });
+  }
+  ctx.resize({ width: 512, height: 512 });
+  const img = await (await ctx.renderAsync()).saveAsync({ compress: 0.85, format: SaveFormat.JPEG });
+  return { uri: img.uri, mime: "image/jpeg", name: "profilo.jpg", width: img.width, height: img.height };
+}

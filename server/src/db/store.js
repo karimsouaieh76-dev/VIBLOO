@@ -92,6 +92,13 @@ export async function createStore(driver) {
     );
     CREATE INDEX IF NOT EXISTS push_by_user ON push_subscriptions (user_id);
 
+    CREATE TABLE IF NOT EXISTS avatars (
+      user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      mime       TEXT NOT NULL,
+      data       ${blob} NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -104,6 +111,7 @@ export async function createStore(driver) {
     "chat_messages ADD COLUMN attachment_id INTEGER REFERENCES attachments(id) ON DELETE SET NULL",
     "chat_messages ADD COLUMN edited_at BIGINT",
     "chat_messages ADD COLUMN deleted_at BIGINT",
+    "users ADD COLUMN avatar_at BIGINT",
   ]) {
     try { await exec(`ALTER TABLE ${column}`); } catch { /* already there */ }
   }
@@ -116,9 +124,9 @@ export async function createStore(driver) {
       one("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?) RETURNING id, username",
         [username, hash, Date.now()]),
     findUserByName: (username) => one("SELECT * FROM users WHERE lower(username) = lower(?)", [username]),
-    findUserById: (id) => one(`SELECT id, username, last_seen AS "lastSeen" FROM users WHERE id = ?`, [id]),
+    findUserById: (id) => one(`SELECT id, username, last_seen AS "lastSeen", avatar_at AS "avatarAt" FROM users WHERE id = ?`, [id]),
     searchUsers: (q, exceptId) =>
-      query(`SELECT id, username, last_seen AS "lastSeen" FROM users
+      query(`SELECT id, username, last_seen AS "lastSeen", avatar_at AS "avatarAt" FROM users
              WHERE id <> ? AND lower(username) LIKE lower(?) ORDER BY lower(username) LIMIT 30`,
         [exceptId, `%${q.replace(/[%_]/g, "")}%`]),
     touchLastSeen: (userId) => query("UPDATE users SET last_seen = ? WHERE id = ?", [Date.now(), userId]),
@@ -174,7 +182,7 @@ export async function createStore(driver) {
       const inList = ids.map(() => "?").join(",");
 
       const members = await query(
-        `SELECT cm.conversation_id AS "conversationId", u.id, u.username, u.last_seen AS "lastSeen",
+        `SELECT cm.conversation_id AS "conversationId", u.id, u.username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt",
                 cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId"
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id
          WHERE cm.conversation_id IN (${inList})`, ids);
@@ -264,6 +272,26 @@ export async function createStore(driver) {
       if (!userIds.length) return [];
       return query(`SELECT endpoint, user_id AS "userId", p256dh, auth FROM push_subscriptions
                     WHERE user_id IN (${userIds.map(() => "?").join(",")})`, userIds);
+    },
+
+    // ---------- profile photos ----------
+    // The photo's timestamp doubles as its version in URLs, so browsers can cache it forever.
+    async setAvatar(userId, mime, data) {
+      const at = Date.now();
+      await query(
+        `INSERT INTO avatars (user_id, mime, data, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at`,
+        [userId, mime, data, at]);
+      await query("UPDATE users SET avatar_at = ? WHERE id = ?", [at, userId]);
+      return at;
+    },
+    async removeAvatar(userId) {
+      await query("DELETE FROM avatars WHERE user_id = ?", [userId]);
+      await query("UPDATE users SET avatar_at = NULL WHERE id = ?", [userId]);
+    },
+    getAvatar: async (userId) => {
+      const r = await one("SELECT mime, data FROM avatars WHERE user_id = ?", [userId]);
+      return r && { mime: r.mime, data: Buffer.from(r.data) };
     },
 
     // ---------- settings ----------

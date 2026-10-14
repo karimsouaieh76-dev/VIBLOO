@@ -64,7 +64,8 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
 
       const call = {
         id: randomUUID(), conversationId: convId, media: kind,
-        from: { id: user.id, username: user.username }, to: { id: other.id, username: other.username },
+        from: { id: user.id, username: user.username, avatarAt: (await db.findUserById(user.id))?.avatarAt ?? null },
+        to: { id: other.id, username: other.username, avatarAt: other.avatarAt ?? null },
         callerSocket: socket.id, calleeSocket: null, answeredAt: null, timer: null,
       };
       if (activeByUser.has(other.id)) {

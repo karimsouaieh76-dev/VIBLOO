@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 
-export type User = { id: number; username: string };
-export type Person = User & { online: boolean; lastSeen: number | null };
+export type User = { id: number; username: string; avatarAt?: number | null };
+export type Person = User & { online: boolean; lastSeen: number | null; avatarAt: number | null };
 export type Member = Person & { lastReadId: number; lastDeliveredId: number };
 export type Attachment = {
   id: number;
@@ -112,6 +112,13 @@ export function createApi(baseUrl: string, token?: string) {
       `${root}/api/attachments/${id}?token=${encodeURIComponent(token ?? "")}${download ? "&download=1" : ""}`,
 
     callConfig: () => request<{ iceServers: RTCIceServer[] }>("/api/call-config"),
+    async setAvatar(file: LocalFile) {
+      const data = await (await fetch(file.uri)).blob();
+      return request<{ avatarAt: number }>("/api/me/avatar", { method: "PUT", body: data, headers: { "content-type": file.mime } });
+    },
+    removeAvatar: () => request<{ avatarAt: null }>("/api/me/avatar", { method: "DELETE" }),
+    avatarUrl: (userId: number, version: number) =>
+      `${root}/api/users/${userId}/avatar?v=${version}&token=${encodeURIComponent(token ?? "")}`,
     pushKey: () => request<{ publicKey: string }>("/api/push/key"),
     pushSubscribe: (subscription: unknown) => post<{ ok: true }>("/api/push/subscribe", { subscription }),
     pushTest: () => post<{ devices: number }>("/api/push/test", {}),

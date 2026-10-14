@@ -10,6 +10,10 @@ App di messaggistica istantanea, in stile WhatsApp:
 - **foto** (ridotte automaticamente), **messaggi vocali** e **file** fino a 15 MB;
 - **modifica** (entro 24 ore) ed **eliminazione per tutti**: tieni premuto un tuo messaggio;
 - **notifiche push** quando l'app è chiusa o in secondo piano;
+- **privacy**: si trova una persona solo scrivendo il suo nome utente esatto; chi ti scrive per
+  la prima volta finisce in **Richieste di messaggio** (Accetta / Elimina / Blocca) e finché non
+  accetti non può chiamarti né vedere se sei online o se hai letto; puoi **bloccare** chiunque
+  (tre puntini in alto nella chat) e sbloccarlo dal Profilo;
 - **chiamate vocali e videochiamate** 1 a 1 (WebRTC): suoneria, muto, videocamera on/off, cambio
   fotocamera, notifica di chiamata in arrivo e storico delle chiamate nella chat.
 
@@ -119,7 +123,10 @@ cd app && npm run typecheck
 |--------|-------------------------------------------|-----------------------------------------------|
 | POST   | `/api/register`, `/api/login`             | `{username, password}` → `{token, user}`      |
 | GET    | `/api/me`                                 | utente corrente                               |
-| GET    | `/api/users?q=`                           | cerca persone per nome utente                 |
+| GET    | `/api/users?q=`                           | trova una persona dal nome utente esatto      |
+| GET    | `/api/contacts`                           | persone con una chat privata accettata        |
+| POST   | `/api/conversations/:id/accept`, `/decline` | accetta o elimina una richiesta di messaggio |
+| GET/POST/DELETE | `/api/blocks`, `/api/blocks/:userId` | persone bloccate                           |
 | GET    | `/api/conversations`                      | le mie chat, con membri, ultimo messaggio e non letti |
 | POST   | `/api/conversations`                      | `{userId}` chat privata, `{name, userIds}` gruppo |
 | GET    | `/api/conversations/:id/messages?before=` | 50 messaggi alla volta                        |

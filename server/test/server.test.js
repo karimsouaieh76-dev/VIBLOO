@@ -52,13 +52,15 @@ test("chat privata: messaggi, spunte, non letti, scrittura e presenza", async ()
   const carla = await register("carla");
   const dario = await register("dario");
 
-  const found = await call("GET", "/api/users?q=car", bruno.token);
+  // Only the exact username finds someone.
+  assert.deepEqual((await call("GET", "/api/users?q=car", bruno.token)).users, []);
+  assert.deepEqual((await call("GET", "/api/users?q=", bruno.token)).users, []);
+  const found = await call("GET", "/api/users?q=CARLA", bruno.token);
   assert.deepEqual(found.users.map((u) => u.username), ["carla"]);
+  assert.equal(found.users[0].online, false, "gli sconosciuti non vedono chi è online");
 
   const sb = await socketFor(bruno.token);
-  const carlaOnline = next(sb, "presence");
   const sc = await socketFor(carla.token);
-  assert.deepEqual(await carlaOnline, { userId: carla.user.id, online: true, lastSeen: null });
 
   const newConv = next(sc, "conversation:new");
   const opened = await call("POST", "/api/conversations", bruno.token, { userId: carla.user.id });
@@ -240,6 +242,7 @@ test("foto profilo", async () => {
   const p = await register("paola");
   const q = await register("quirino");
   const sq = await socketFor(q.token);
+  await call("POST", "/api/conversations", q.token, { userId: p.user.id });
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
   const put = (token, body, type) => fetch(`${base}/api/me/avatar`, {
     method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": type }, body,
@@ -262,7 +265,6 @@ test("foto profilo", async () => {
   assert.equal((await call("GET", "/api/me", p.token)).user.avatarAt, saved.avatarAt);
   const found = await call("GET", "/api/users?q=paola", q.token);
   assert.equal(found.users[0].avatarAt, saved.avatarAt);
-  await call("POST", "/api/conversations", q.token, { userId: p.user.id });
   const list = await call("GET", "/api/conversations", q.token);
   assert.equal(list.conversations[0].members.find((m) => m.id === p.user.id).avatarAt, saved.avatarAt);
 

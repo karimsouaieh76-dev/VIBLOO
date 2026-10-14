@@ -29,14 +29,17 @@ export function NewChatScreen({ api, onBack, onOpened }: Props) {
     return () => sub.remove();
   }, [onBack]);
 
-  // Debounced search; an empty query lists everyone (up to 30).
+  // Empty search: your contacts. Otherwise only the exact username finds
+  // someone, so nobody can browse who is signed up.
   useEffect(() => {
     let cancelled = false;
+    const q = query.trim().replace(/^@/, "");
+    if (q) setPeople(null);
     const timer = setTimeout(() => {
-      api.searchUsers(query.trim())
+      (q ? api.searchUsers(q) : api.contacts())
         .then((r) => { if (!cancelled) setPeople(r.users); })
         .catch((e) => { if (!cancelled) setError((e as Error).message); });
-    }, 200);
+    }, q ? 350 : 0);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [query, api]);
 
@@ -93,7 +96,7 @@ export function NewChatScreen({ api, onBack, onOpened }: Props) {
 
       <View style={s.searchWrap}>
         <TextInput
-          style={s.input} value={query} onChangeText={setQuery} placeholder="Cerca per nome utente"
+          style={s.input} value={query} onChangeText={setQuery} placeholder="Nome utente esatto (es. giulia.r)"
           placeholderTextColor={t.muted} autoCapitalize="none" autoCorrect={false} autoFocus
         />
       </View>
@@ -104,16 +107,25 @@ export function NewChatScreen({ api, onBack, onOpened }: Props) {
         keyExtractor={(p) => String(p.id)}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingBottom: 110 + insets.bottom }}
-        ListHeaderComponent={!groupMode ? (
-          <Pressable style={({ pressed }) => [s.row, pressed && { backgroundColor: t.accentSoft }]} onPress={() => setGroupMode(true)}>
-            <View style={s.groupIcon}><Text style={s.groupIconText}>#</Text></View>
-            <Text style={s.name}>Nuovo gruppo</Text>
-          </Pressable>
-        ) : null}
+        ListHeaderComponent={
+          <>
+            {!groupMode && (
+              <Pressable style={({ pressed }) => [s.row, pressed && { backgroundColor: t.accentSoft }]} onPress={() => setGroupMode(true)}>
+                <View style={s.groupIcon}><Text style={s.groupIconText}>#</Text></View>
+                <Text style={s.name}>Nuovo gruppo</Text>
+              </Pressable>
+            )}
+            {(people?.length ?? 0) > 0 && (
+              <Text style={s.section}>{query.trim() ? "Risultato" : "I tuoi contatti"}</Text>
+            )}
+          </>
+        }
         ListEmptyComponent={
           people == null ? <ActivityIndicator color={t.accent} style={{ marginTop: 24 }} /> : (
             <Text style={s.empty}>
-              {query ? `Nessuno si chiama "${query}". Controlla il nome utente.` : "Non ci sono ancora altre persone. Invita qualcuno a registrarsi."}
+              {query.trim()
+                ? `Nessuno ha il nome utente "${query.trim()}". Controlla di averlo scritto esattamente.`
+                : "Non hai ancora contatti. Scrivi qui sopra il nome utente esatto di chi vuoi contattare: chiedilo a quella persona."}
             </Text>
           )
         }
@@ -163,6 +175,7 @@ const styles = (t: Theme) => StyleSheet.create({
   seen: { fontSize: 13, color: t.muted, marginTop: 1 },
   groupIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" },
   groupIconText: { color: t.accentFg, fontWeight: "800", fontSize: 18 },
+  section: { fontSize: 12, fontWeight: "600", color: t.muted, textTransform: "uppercase", letterSpacing: 0.8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
   empty: { color: t.muted, textAlign: "center", padding: 24, fontSize: 15 },
   check: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: t.line, alignItems: "center", justifyContent: "center" },
   checkOn: { backgroundColor: t.accent, borderColor: t.accent },

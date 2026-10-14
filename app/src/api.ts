@@ -2,7 +2,8 @@ import { Platform } from "react-native";
 
 export type User = { id: number; username: string; avatarAt?: number | null };
 export type Person = User & { online: boolean; lastSeen: number | null; avatarAt: number | null };
-export type Member = Person & { lastReadId: number; lastDeliveredId: number };
+export type MemberStatus = "accepted" | "pending";
+export type Member = Person & { lastReadId: number; lastDeliveredId: number; status: MemberStatus };
 export type Attachment = {
   id: number;
   mime: string;
@@ -42,6 +43,8 @@ export type Conversation = {
   lastMessage: Message | null;
   unread: number;
   updatedAt: number;
+  myStatus: MemberStatus; // "pending": a message request I have not answered
+  blockedByMe: boolean;
 };
 
 // On the web the app is served by the chat server itself, so it talks to the
@@ -89,6 +92,12 @@ export function createApi(baseUrl: string, token?: string) {
     me: () => request<{ user: User }>("/api/me"),
     searchUsers: (q: string) => request<{ users: Person[] }>(`/api/users?q=${encodeURIComponent(q)}`),
     conversations: () => request<{ conversations: Conversation[] }>("/api/conversations"),
+    contacts: () => request<{ users: Person[] }>("/api/contacts"),
+    acceptRequest: (id: number) => post<{ conversation: Conversation }>(`/api/conversations/${id}/accept`, {}),
+    declineRequest: (id: number) => post<{ ok: true }>(`/api/conversations/${id}/decline`, {}),
+    blocks: () => request<{ users: User[] }>("/api/blocks"),
+    block: (userId: number) => post<{ ok: true }>("/api/blocks", { userId }),
+    unblock: (userId: number) => request<{ ok: true }>(`/api/blocks/${userId}`, { method: "DELETE" }),
     openDirect: (userId: number) => post<{ conversation: Conversation }>("/api/conversations", { userId }),
     createGroup: (name: string, userIds: number[]) =>
       post<{ conversation: Conversation }>("/api/conversations", { name, userIds }),

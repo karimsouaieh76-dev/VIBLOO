@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Api, User } from "../api";
@@ -22,6 +22,20 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [blocked, setBlocked] = useState<User[] | null>(null);
+
+  useEffect(() => {
+    api.blocks().then((r) => setBlocked(r.users)).catch(() => setBlocked([]));
+  }, [api]);
+
+  async function unblock(u: User) {
+    try {
+      await api.unblock(u.id);
+      setBlocked((list) => (list ?? []).filter((x) => x.id !== u.id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => { onBack(); return true; });
@@ -64,7 +78,7 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
         <Text style={s.title}>Profilo</Text>
       </View>
 
-      <View style={s.body}>
+      <ScrollView contentContainerStyle={s.body}>
         <Pressable onPress={change} disabled={busy} accessibilityRole="button" accessibilityLabel="Cambia foto profilo">
           <Avatar name={me.username} id={me.id} size={140} photo={avatarAt} />
           <View style={s.badge}>
@@ -90,8 +104,27 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
           </Pressable>
         </View>
         {error ? <Text style={s.error}>{error}</Text> : null}
-        <Text style={s.hint}>La foto la vedono tutte le persone con cui chatti.</Text>
-      </View>
+        <Text style={s.hint}>La foto la vedono tutte le persone con cui chatti, tranne chi hai bloccato.</Text>
+
+        <Text style={s.section}>Persone bloccate</Text>
+        <View style={s.actions}>
+          {blocked == null ? (
+            <ActivityIndicator color={t.accent} style={{ padding: 16 }} />
+          ) : blocked.length === 0 ? (
+            <Text style={[s.rowText, { color: t.muted, padding: 16, fontSize: 14 }]}>
+              Nessuno. Per bloccare qualcuno apri la chat e tocca i tre puntini in alto.
+            </Text>
+          ) : blocked.map((u) => (
+            <View key={u.id} style={s.row}>
+              <Avatar name={u.username} id={u.id} size={36} />
+              <Text style={[s.rowText, { flex: 1 }]}>{u.username}</Text>
+              <Pressable onPress={() => unblock(u)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Sblocca ${u.username}`}>
+                <Text style={{ color: t.accent, fontWeight: "700" }}>Sblocca</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -100,7 +133,7 @@ const styles = (t: Theme) => StyleSheet.create({
   root: { flex: 1, backgroundColor: t.bg },
   header: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 12 },
   title: { fontSize: 20, fontWeight: "700", color: t.fg },
-  body: { alignItems: "center", paddingHorizontal: 20, paddingTop: 24, gap: 12 },
+  body: { alignItems: "center", paddingHorizontal: 20, paddingTop: 24, paddingBottom: 40, gap: 12 },
   badge: {
     position: "absolute", right: 4, bottom: 4, width: 40, height: 40, borderRadius: 20, backgroundColor: t.accent,
     alignItems: "center", justifyContent: "center", borderWidth: 3, borderColor: t.bg,
@@ -114,5 +147,9 @@ const styles = (t: Theme) => StyleSheet.create({
   pressed: { backgroundColor: t.accentSoft },
   rowText: { fontSize: 16, color: t.fg, fontWeight: "500" },
   error: { color: t.danger, textAlign: "center" },
+  section: {
+    alignSelf: "center", maxWidth: 480, width: "100%", marginTop: 18, fontSize: 12, fontWeight: "600", color: t.muted,
+    textTransform: "uppercase", letterSpacing: 0.8,
+  },
   hint: { color: t.muted, fontSize: 13, textAlign: "center", marginTop: 4 },
 });

@@ -81,6 +81,29 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   const title = conversationTitle(c, me);
   const others = otherMembers(c, me);
   const typers = Object.values(messenger.typing[c.id] ?? {});
+  const partner = c.isGroup ? undefined : others[0];
+  const isRequest = c.myStatus === "pending"; // someone I don't know wrote to me
+  const blocked = c.blockedByMe;
+  const requestSent = !isRequest && partner?.status === "pending"; // I wrote, they haven't accepted
+  const canCall = Boolean(onCall) && !c.isGroup && !isRequest && !blocked && !requestSent;
+  const [chatMenu, setChatMenu] = useState(false);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+
+  async function acceptRequest() {
+    try { await messenger.acceptRequest(c.id); } catch (e) { setError((e as Error).message); }
+  }
+  async function deleteRequest() {
+    try { await messenger.declineRequest(c.id); onBack(); } catch (e) { setError((e as Error).message); }
+  }
+  async function setBlock(on: boolean) {
+    if (!partner) return;
+    try {
+      await messenger.setBlocked(partner.id, on);
+      if (on && isRequest) onBack();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   let subtitle: string;
   if (typers.length) subtitle = c.isGroup ? `${typers.join(", ")} sta scrivendo…` : "sta scrivendo…";
@@ -215,7 +238,7 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
             <Text style={[s.subtitle, typers.length > 0 && { color: t.online, fontWeight: "600" }]} numberOfLines={1}>{subtitle}</Text>
           ) : null}
         </View>
-        {onCall && !c.isGroup && (
+        {canCall && onCall && (
           <>
             <Pressable onPress={() => onCall("audio")} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Chiamata vocale">
               <Ionicons name="call" size={22} color={t.accent} />
@@ -225,8 +248,18 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
             </Pressable>
           </>
         )}
+        {partner && !isRequest && (
+          <Pressable onPress={() => setChatMenu(true)} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Altre opzioni">
+            <Ionicons name="ellipsis-vertical" size={20} color={t.accent} />
+          </Pressable>
+        )}
       </View>
       {!messenger.connected && <Text style={s.offline}>Connessione persa: i messaggi partiranno quando torna la rete.</Text>}
+      {requestSent && (
+        <Text style={s.infoBar}>
+          Richiesta inviata: {partner?.username} vedrà i tuoi messaggi e potrà risponderti dopo averla accettata.
+        </Text>
+      )}
 
       <View style={s.body}>
         {loading && !list ? (
@@ -270,6 +303,40 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       </View>
 
       {error && list ? <Text style={s.error}>{error}</Text> : null}
+      {isRequest ? (
+        // A message request: nothing goes back until I decide.
+        <View style={[s.panel, { paddingBottom: bottomGap }]}>
+          <Text style={s.panelTitle}>
+            {c.isGroup ? "Sei stato aggiunto a questo gruppo" : `${title} vuole scriverti`}
+          </Text>
+          <Text style={s.panelText}>
+            {c.isGroup
+              ? "Ti ha aggiunto una persona che non è tra i tuoi contatti. Se accetti potrai leggere e scrivere nel gruppo."
+              : `Se accetti, ${title} potrà chiamarti e vedere quando sei online e quando leggi i messaggi.`}
+          </Text>
+          <View style={s.panelRow}>
+            {partner && (
+              <Pressable style={[s.panelBtn, s.panelBtnDanger]} onPress={() => setConfirmBlock(true)} accessibilityRole="button">
+                <Text style={[s.panelBtnText, { color: t.danger }]}>Blocca</Text>
+              </Pressable>
+            )}
+            <Pressable style={s.panelBtn} onPress={deleteRequest} accessibilityRole="button">
+              <Text style={s.panelBtnText}>Elimina</Text>
+            </Pressable>
+            <Pressable style={[s.panelBtn, s.panelBtnPrimary]} onPress={acceptRequest} accessibilityRole="button">
+              <Text style={[s.panelBtnText, { color: t.accentFg }]}>Accetta</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : blocked ? (
+        <View style={[s.panel, { paddingBottom: bottomGap }]}>
+          <Text style={s.panelText}>Hai bloccato {title}. Non può scriverti, chiamarti né vedere quando sei online.</Text>
+          <Pressable style={[s.panelBtn, s.panelBtnPrimary, { alignSelf: "center", paddingHorizontal: 28 }]} onPress={() => setBlock(false)} accessibilityRole="button">
+            <Text style={[s.panelBtnText, { color: t.accentFg }]}>Sblocca</Text>
+          </Pressable>
+        </View>
+      ) : (
+      <>
       {editing && (
         <View style={s.editBar}>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -338,6 +405,20 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
         </View>
       )}
 
+      </>
+      )}
+
+      <ActionSheet
+        visible={chatMenu} onClose={() => setChatMenu(false)}
+        options={blocked
+          ? [{ label: `Sblocca ${title}`, onPress: () => setBlock(false) }]
+          : [{ label: `Blocca ${title}`, danger: true, onPress: () => setConfirmBlock(true) }]}
+      />
+      <ActionSheet
+        visible={confirmBlock} onClose={() => setConfirmBlock(false)}
+        title={`${title} non potrà più scriverti né chiamarti, e non vedrà la tua foto né quando sei online. Non riceverà nessun avviso.`}
+        options={[{ label: `Blocca ${title}`, danger: true, onPress: () => setBlock(true) }]}
+      />
       <ActionSheet
         visible={attachOpen} onClose={() => setAttachOpen(false)}
         options={[
@@ -489,6 +570,21 @@ const styles = (t: Theme) => StyleSheet.create({
     backgroundColor: t.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line,
   },
   back: { fontSize: 34, lineHeight: 36, color: t.accent, paddingRight: 2 },
+  infoBar: { backgroundColor: t.accentSoft, color: t.fg, fontSize: 13, textAlign: "center", paddingVertical: 8, paddingHorizontal: 16 },
+  panel: {
+    backgroundColor: t.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line,
+    paddingHorizontal: 16, paddingTop: 14, gap: 10,
+  },
+  panelTitle: { fontSize: 16, fontWeight: "700", color: t.fg, textAlign: "center" },
+  panelText: { fontSize: 13.5, color: t.muted, textAlign: "center", lineHeight: 19 },
+  panelRow: { flexDirection: "row", gap: 8, marginTop: 2 },
+  panelBtn: {
+    flex: 1, borderRadius: 12, paddingVertical: 12, alignItems: "center",
+    backgroundColor: t.panel, borderWidth: StyleSheet.hairlineWidth, borderColor: t.line,
+  },
+  panelBtnPrimary: { backgroundColor: t.accent, borderColor: t.accent },
+  panelBtnDanger: {},
+  panelBtnText: { fontSize: 15, fontWeight: "700", color: t.fg },
   callBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   callBubble: { gap: 2, paddingVertical: 8 },
   title: { fontSize: 17, fontWeight: "700", color: t.fg },

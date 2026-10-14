@@ -75,6 +75,7 @@ test("notifica push a chi non ha l'app aperta", async () => {
   const anna = await post("/api/register", null, { username: "anna", password: "password123" });
   const beppe = await post("/api/register", null, { username: "beppe", password: "password123" });
   const { conversation } = await post("/api/conversations", anna.token, { userId: beppe.user.id });
+  await post(`/api/conversations/${conversation.id}/accept`, beppe.token, {});
 
   // What a browser's PushManager would hand over.
   const ecdh = createECDH("prime256v1");

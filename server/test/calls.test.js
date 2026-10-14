@@ -42,6 +42,7 @@ async function pair() {
   const a = await call("POST", "/api/register", null, { username: `alfa${n}`, password: "password123" });
   const b = await call("POST", "/api/register", null, { username: `beta${n}`, password: "password123" });
   const { conversation } = await call("POST", "/api/conversations", a.token, { userId: b.user.id });
+  await call("POST", `/api/conversations/${conversation.id}/accept`, b.token, {});
   return { a, b, conv: conversation.id, sa: await socketFor(a.token), sb: await socketFor(b.token) };
 }
 
@@ -99,6 +100,7 @@ test("chiamata rifiutata, persa e occupato", async () => {
   // Beta is still ringing for Alfa: a third person gets "busy" straight away.
   const other = await pair();
   const { conversation: toBeta } = await call("POST", "/api/conversations", other.a.token, { userId: b.user.id });
+  await call("POST", `/api/conversations/${toBeta.id}/accept`, b.token, {});
   const ringing = await sa.emitWithAck("call:invite", { conversationId: conv, media: "audio" });
   assert.ok(ringing.callId);
   const busy = next(other.sa, "call:ended");

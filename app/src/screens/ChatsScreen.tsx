@@ -8,6 +8,7 @@ import { conversationTitle, formatListDate, messagePreview, messageStatus, other
 import { enablePush, pushState, PushState, syncPush } from "../push";
 import { Theme, useTheme } from "../theme";
 import { Logo } from "../Logo";
+import Ionicons from "@expo/vector-icons/Ionicons";
 
 type Props = {
   me: User;
@@ -23,6 +24,8 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
   const s = styles(t);
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState("");
+  const [showRequests, setShowRequests] = useState(false);
+  const requests = messenger.conversations.filter((c) => c.myStatus === "pending");
   const [push, setPush] = useState<PushState>(pushState());
   const [pushError, setPushError] = useState("");
   const [pushInfo, setPushInfo] = useState("");
@@ -63,17 +66,36 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? messenger.conversations.filter((c) => conversationTitle(c, me).toLowerCase().includes(q)) : messenger.conversations;
-  }, [messenger.conversations, query, me]);
+    const base = messenger.conversations.filter((c) => (c.myStatus === "pending") === showRequests);
+    return q ? base.filter((c) => conversationTitle(c, me).toLowerCase().includes(q)) : base;
+  }, [messenger.conversations, query, me, showRequests]);
+
+  useEffect(() => {
+    if (showRequests && requests.length === 0) setShowRequests(false);
+  }, [showRequests, requests.length]);
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
+      {showRequests ? (
+        <View style={s.header}>
+          <Pressable onPress={() => setShowRequests(false)} hitSlop={12} accessibilityLabel="Torna alle chat" style={s.reqBack}>
+            <Ionicons name="chevron-back" size={28} color={t.accent} />
+            <Text style={s.reqTitle}>Richieste di messaggio</Text>
+          </Pressable>
+        </View>
+      ) : (
       <View style={s.header}>
         <Logo height={30} />
         <Pressable onPress={onProfile} hitSlop={10} accessibilityRole="button" accessibilityLabel="Profilo">
           <Avatar name={me.username} id={me.id} size={38} photo={messenger.myAvatarAt} />
         </Pressable>
       </View>
+      )}
+      {showRequests && (
+        <Text style={s.reqHint}>
+          Persone che non conosci. Non sanno se hai letto i loro messaggi finché non accetti.
+        </Text>
+      )}
       {!messenger.connected && <Text style={s.offline}>In attesa di connessione…</Text>}
       {push === "default" && (
         <View style={s.banner}>
@@ -109,6 +131,14 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
         />
       </View>
 
+      {!showRequests && requests.length > 0 && (
+        <Pressable style={({ pressed }) => [s.reqRow, pressed && { backgroundColor: t.accentSoft }]} onPress={() => setShowRequests(true)} accessibilityRole="button">
+          <View style={s.reqIcon}><Ionicons name="mail-unread-outline" size={22} color={t.accent} /></View>
+          <Text style={s.reqRowText}>Richieste di messaggio</Text>
+          <View style={s.badge}><Text style={s.badgeText}>{requests.length}</Text></View>
+        </Pressable>
+      )}
+
       <FlatList
         data={list}
         keyExtractor={(c) => String(c.id)}
@@ -127,12 +157,12 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
         }
       />
 
-      <Pressable
+      {!showRequests && <Pressable
         style={[s.fab, { bottom: 24 + insets.bottom }]} onPress={onNewChat}
         accessibilityRole="button" accessibilityLabel="Nuova chat"
       >
         <Text style={s.fabText}>＋</Text>
-      </Pressable>
+      </Pressable>}
     </View>
   );
 }
@@ -192,6 +222,12 @@ const styles = (t: Theme) => StyleSheet.create({
   pushRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 20, paddingTop: 2 },
   pushLink: { color: t.accent, fontSize: 12.5, fontWeight: "600" },
   pushOff: { color: t.muted, fontSize: 12.5, paddingHorizontal: 20, paddingTop: 4 },
+  reqBack: { flexDirection: "row", alignItems: "center", gap: 4 },
+  reqTitle: { fontSize: 20, fontWeight: "700", color: t.fg },
+  reqHint: { color: t.muted, fontSize: 13, paddingHorizontal: 20, paddingBottom: 6 },
+  reqRow: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 10 },
+  reqIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: t.accentSoft, alignItems: "center", justifyContent: "center" },
+  reqRowText: { flex: 1, fontSize: 16, fontWeight: "600", color: t.fg },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 8 },
   search: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: t.fg },
   row: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 10 },

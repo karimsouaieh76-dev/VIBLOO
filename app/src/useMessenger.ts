@@ -88,6 +88,12 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     });
     socket.on("disconnect", () => setConnected(false));
 
+    // How a chat looks to me changed (request accepted, someone blocked, …).
+    socket.on("conversation:update", (c: Conversation) =>
+      setConversations((list) => [c, ...list.filter((x) => x.id !== c.id)].sort(byActivity)));
+    socket.on("conversation:removed", ({ id }: { id: number }) =>
+      setConversations((list) => list.filter((x) => x.id !== id)));
+
     socket.on("conversation:new", (c: Conversation) =>
       setConversations((list) => (list.some((x) => x.id === c.id) ? list : [...list, c].sort(byActivity))));
 
@@ -276,13 +282,27 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   const addConversation = useCallback((c: Conversation) =>
     setConversations((list) => [c, ...list.filter((x) => x.id !== c.id)].sort(byActivity)), []);
 
-  const totalUnread = conversations.reduce((n, c) => n + c.unread, 0);
+  const replaceConversation = useCallback((c: Conversation) =>
+    setConversations((list) => [c, ...list.filter((x) => x.id !== c.id)].sort(byActivity)), []);
+  const acceptRequest = useCallback(async (id: number) => replaceConversation((await api.acceptRequest(id)).conversation), [api]);
+  const declineRequest = useCallback(async (id: number) => {
+    await api.declineRequest(id);
+    setConversations((list) => list.filter((x) => x.id !== id));
+  }, [api]);
+  const setBlocked = useCallback(async (userId: number, blocked: boolean) => {
+    await (blocked ? api.block(userId) : api.unblock(userId));
+    // The server also sends the updated chat; mark it right away meanwhile.
+    setConversations((list) => list.map((c) => !c.isGroup && c.members.some((m) => m.id === userId) ? { ...c, blockedByMe: blocked } : c));
+  }, [api]);
+
+  const totalUnread = conversations.reduce((n, c) => n + (c.myStatus === "pending" ? 0 : c.unread), 0);
   useEffect(() => {
     if (Platform.OS === "web") document.title = totalUnread ? `(${totalUnread}) Vibloo` : "Vibloo";
   }, [totalUnread]);
 
   return {
     socket, myAvatarAt, setMyAvatarAt, connected, loaded, conversations, messages, typing, totalUnread,
+    acceptRequest, declineRequest, setBlocked,
     openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
   };
 }

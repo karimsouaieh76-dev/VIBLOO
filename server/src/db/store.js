@@ -99,6 +99,13 @@ export async function createStore(driver) {
       updated_at BIGINT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS blocks (
+      blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at BIGINT NOT NULL,
+      PRIMARY KEY (blocker_id, blocked_id)
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -112,6 +119,8 @@ export async function createStore(driver) {
     "chat_messages ADD COLUMN edited_at BIGINT",
     "chat_messages ADD COLUMN deleted_at BIGINT",
     "users ADD COLUMN avatar_at BIGINT",
+    // accepted | pending (a message request not answered yet) | declined
+    "conversation_members ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'",
   ]) {
     try { await exec(`ALTER TABLE ${column}`); } catch { /* already there */ }
   }
@@ -125,10 +134,18 @@ export async function createStore(driver) {
         [username, hash, Date.now()]),
     findUserByName: (username) => one("SELECT * FROM users WHERE lower(username) = lower(?)", [username]),
     findUserById: (id) => one(`SELECT id, username, last_seen AS "lastSeen", avatar_at AS "avatarAt" FROM users WHERE id = ?`, [id]),
-    searchUsers: (q, exceptId) =>
+    // Only an exact username finds someone: nobody can browse who is signed up.
+    findByExactName: (q, exceptId) =>
       query(`SELECT id, username, last_seen AS "lastSeen", avatar_at AS "avatarAt" FROM users
-             WHERE id <> ? AND lower(username) LIKE lower(?) ORDER BY lower(username) LIMIT 30`,
-        [exceptId, `%${q.replace(/[%_]/g, "")}%`]),
+             WHERE id <> ? AND lower(username) = lower(?)`, [exceptId, q]),
+    // People you already talk to: both sides accepted a private chat.
+    contacts: (userId) =>
+      query(`SELECT u.id, u.username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt"
+             FROM conversations c
+             JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = ? AND me.status = 'accepted'
+             JOIN conversation_members o ON o.conversation_id = c.id AND o.user_id <> ? AND o.status = 'accepted'
+             JOIN users u ON u.id = o.user_id
+             WHERE c.is_group = 0 ORDER BY lower(u.username)`, [userId, userId]),
     touchLastSeen: (userId) => query("UPDATE users SET last_seen = ? WHERE id = ?", [Date.now(), userId]),
 
     // ---------- conversations ----------
@@ -139,9 +156,25 @@ export async function createStore(driver) {
       const r = await one("SELECT is_group AS \"isGroup\", name FROM conversations WHERE id = ?", [id]);
       return r && { isGroup: Boolean(r.isGroup), name: r.name };
     },
+    // Members who have not declined the conversation.
     memberIds: async (conversationId) =>
-      (await query("SELECT user_id AS id FROM conversation_members WHERE conversation_id = ?", [conversationId]))
+      (await query("SELECT user_id AS id FROM conversation_members WHERE conversation_id = ? AND status <> 'declined'", [conversationId]))
         .map((r) => r.id),
+    // Who may see someone's online status: people sharing a chat both accepted.
+    audience: async (userId) =>
+      (await query(`SELECT DISTINCT o.user_id AS id FROM conversation_members me
+                    JOIN conversation_members o ON o.conversation_id = me.conversation_id AND o.user_id <> me.user_id
+                    WHERE me.user_id = ? AND me.status = 'accepted' AND o.status = 'accepted'`, [userId])).map((r) => r.id),
+    // Who sees someone's photo change live: anyone in a chat with them.
+    coMembers: async (userId) =>
+      (await query(`SELECT DISTINCT o.user_id AS id FROM conversation_members me
+                    JOIN conversation_members o ON o.conversation_id = me.conversation_id AND o.user_id <> me.user_id
+                    WHERE me.user_id = ? AND me.status <> 'declined' AND o.status <> 'declined'`, [userId])).map((r) => r.id),
+
+    findDirect: async (a, b) => {
+      const key = [a, b].sort((x, y) => x - y).join(":");
+      return { id: (await one("SELECT id FROM conversations WHERE direct_key = ?", [key]))?.id ?? null };
+    },
 
     async findOrCreateDirect(userId, otherId) {
       const key = [userId, otherId].sort((a, b) => a - b).join(":");
@@ -152,9 +185,9 @@ export async function createStore(driver) {
         `INSERT INTO conversations (is_group, direct_key, created_by, created_at) VALUES (0, ?, ?, ?)
          ON CONFLICT (direct_key) DO NOTHING RETURNING id`, [key, userId, now]);
       if (!c) return { id: (await one("SELECT id FROM conversations WHERE direct_key = ?", [key])).id, created: false };
-      for (const id of [userId, otherId]) {
-        await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)", [c.id, id, now]);
-      }
+      // The person who writes first is in; the other gets a message request.
+      await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at, status) VALUES (?, ?, ?, 'accepted')", [c.id, userId, now]);
+      await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at, status) VALUES (?, ?, ?, 'pending')", [c.id, otherId, now]);
       return { id: c.id, created: true };
     },
 
@@ -162,8 +195,12 @@ export async function createStore(driver) {
       const now = Date.now();
       const c = await one("INSERT INTO conversations (is_group, name, created_by, created_at) VALUES (1, ?, ?, ?) RETURNING id",
         [name, creatorId, now]);
+      // Contacts join straight away; anyone else finds the group in their requests.
+      const contactIds = new Set((await store.contacts(creatorId)).map((u) => u.id));
       for (const id of new Set([creatorId, ...userIds])) {
-        await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)", [c.id, id, now]);
+        const status = id === creatorId || contactIds.has(id) ? "accepted" : "pending";
+        await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at, status) VALUES (?, ?, ?, ?)",
+          [c.id, id, now, status]);
       }
       return c.id;
     },
@@ -174,16 +211,16 @@ export async function createStore(driver) {
       const filter = onlyId ? "AND c.id = ?" : "";
       const params = onlyId ? [userId, onlyId] : [userId];
       const convs = await query(
-        `SELECT c.id, c.is_group AS "isGroup", c.name, c.created_at AS "createdAt"
+        `SELECT c.id, c.is_group AS "isGroup", c.name, c.created_at AS "createdAt", me.status AS "myStatus"
          FROM conversations c JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = ?
-         WHERE 1 = 1 ${filter}`, params);
+         WHERE me.status <> 'declined' ${filter}`, params);
       if (!convs.length) return [];
       const ids = convs.map((c) => c.id);
       const inList = ids.map(() => "?").join(",");
 
       const members = await query(
         `SELECT cm.conversation_id AS "conversationId", u.id, u.username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt",
-                cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId"
+                cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId", cm.status
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id
          WHERE cm.conversation_id IN (${inList})`, ids);
       const last = (await query(
@@ -202,6 +239,7 @@ export async function createStore(driver) {
           id: c.id,
           isGroup: Boolean(c.isGroup),
           name: c.name,
+          myStatus: c.myStatus,
           members: members.filter((m) => m.conversationId === c.id).map(({ conversationId, ...m }) => m),
           lastMessage,
           unread: unread.find((u) => u.conversationId === c.id)?.n ?? 0,
@@ -209,6 +247,26 @@ export async function createStore(driver) {
         };
       }).sort((a, b) => b.updatedAt - a.updatedAt);
     },
+
+    memberStatus: async (conversationId, userId) =>
+      (await one("SELECT status FROM conversation_members WHERE conversation_id = ? AND user_id = ?", [conversationId, userId]))?.status ?? null,
+    setMemberStatus: (conversationId, userId, status) =>
+      query("UPDATE conversation_members SET status = ? WHERE conversation_id = ? AND user_id = ?", [status, conversationId, userId]),
+    directPartner: async (conversationId, userId) =>
+      (await one(`SELECT cm.user_id AS id FROM conversation_members cm JOIN conversations c ON c.id = cm.conversation_id
+                  WHERE cm.conversation_id = ? AND cm.user_id <> ? AND c.is_group = 0`, [conversationId, userId]))?.id ?? null,
+
+    // ---------- blocking ----------
+    block: (blockerId, blockedId) =>
+      query("INSERT INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+        [blockerId, blockedId, Date.now()]),
+    unblock: (blockerId, blockedId) => query("DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?", [blockerId, blockedId]),
+    blockedBy: async (blockerId) =>
+      (await query("SELECT blocked_id AS id FROM blocks WHERE blocker_id = ?", [blockerId])).map((r) => r.id),
+    blockersOf: async (blockedId) =>
+      (await query("SELECT blocker_id AS id FROM blocks WHERE blocked_id = ?", [blockedId])).map((r) => r.id),
+    eitherBlocked: async (a, b) =>
+      Boolean(await one("SELECT 1 AS x FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)", [a, b, b, a])),
 
     // ---------- messages ----------
     async addMessage(conversationId, userId, text, attachment = null, kind = null) {

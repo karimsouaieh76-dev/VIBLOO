@@ -47,11 +47,57 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     return false;
   };
 
-  // Adds live "online" flags to conversation summaries.
-  const withPresence = (convs) =>
-    convs.map((c) => ({ ...c, members: c.members.map((m) => ({ ...m, online: isOnline(m.id) })) }));
+  // What a viewer may see of the people in their chats: online status, last
+  // seen and read receipts only from people who accepted the chat and have not
+  // blocked them; no photo from people who blocked them.
+  const withPresence = async (convs, viewerId) => {
+    const blockers = new Set(await db.blockersOf(viewerId));
+    const blocked = new Set(await db.blockedBy(viewerId));
+    return convs.map((c) => {
+      const partner = c.isGroup ? null : c.members.find((m) => m.id !== viewerId);
+      return {
+        ...c,
+        blockedByMe: Boolean(partner && blocked.has(partner.id)),
+        members: c.members.map((m) => {
+          if (m.id === viewerId) return { ...m, online: isOnline(m.id) };
+          const hidden = blockers.has(m.id) || m.status !== "accepted" || blocked.has(m.id);
+          return {
+            ...m,
+            online: hidden ? false : isOnline(m.id),
+            lastSeen: hidden ? null : m.lastSeen,
+            avatarAt: blockers.has(m.id) ? null : m.avatarAt,
+            lastReadId: m.status === "accepted" ? m.lastReadId : 0,
+            lastDeliveredId: m.status === "accepted" ? m.lastDeliveredId : 0,
+          };
+        }),
+      };
+    });
+  };
   const summary = async (userId, conversationId) =>
-    withPresence(await db.conversationsFor(userId, conversationId))[0];
+    (await withPresence(await db.conversationsFor(userId, conversationId), userId))[0];
+  const roomsOf = (ids) => ids.map(userRoom);
+
+  // Tell each member how a conversation looks to them now.
+  const pushSummaries = async (conversationId, event = "conversation:update") => {
+    for (const memberId of await db.memberIds(conversationId)) {
+      const view = await summary(memberId, conversationId);
+      if (view) io.to(userRoom(memberId)).emit(event, view);
+    }
+  };
+
+  // A new photo shows up live for people in a chat with the user, minus anyone they blocked.
+  const announceProfile = async (userId, avatarAt) => {
+    const blocked = new Set(await db.blockedBy(userId));
+    const to = (await db.coMembers(userId)).filter((id) => !blocked.has(id));
+    if (to.length) io.to(roomsOf(to)).emit("profile", { userId, avatarAt });
+  };
+
+  // Presence goes only to people the user shares an accepted chat with, minus anyone they blocked.
+  const announcePresence = async (userId, payload) => {
+    const blocked = new Set(await db.blockedBy(userId));
+    const to = (await db.audience(userId)).filter((id) => !blocked.has(id));
+    if (to.length) io.to(roomsOf(to)).emit("presence", payload);
+  };
 
   const app = express();
   app.use(cors());
@@ -109,31 +155,108 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     }
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "L'immagine è vuota." });
     const avatarAt = await db.setAvatar(req.user.id, mime, req.body);
-    io.emit("profile", { userId: req.user.id, avatarAt });
+    await announceProfile(req.user.id, avatarAt);
     res.json({ avatarAt });
   });
 
   app.delete("/api/me/avatar", requireUser, async (req, res) => {
     await db.removeAvatar(req.user.id);
-    io.emit("profile", { userId: req.user.id, avatarAt: null });
+    await announceProfile(req.user.id, null);
     res.json({ avatarAt: null });
   });
 
   app.get("/api/users/:id/avatar", requireUser, async (req, res) => {
-    const photo = await db.getAvatar(toId(req.params.id) ?? 0);
+    const owner = toId(req.params.id) ?? 0;
+    if ((await db.blockedBy(owner)).includes(req.user.id)) return res.status(404).json({ error: "Nessuna foto profilo." });
+    const photo = await db.getAvatar(owner);
     if (!photo) return res.status(404).json({ error: "Nessuna foto profilo." });
     res.set({ "Content-Type": photo.mime, "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff" });
     res.send(photo.data);
   });
 
+  // Exact username only; strangers never see online status or last seen.
   app.get("/api/users", requireUser, async (req, res) => {
-    const q = String(req.query.q ?? "").trim().slice(0, 24);
-    const users = await db.searchUsers(q, req.user.id);
+    const q = String(req.query.q ?? "").trim().replace(/^@/, "").slice(0, 24);
+    if (!q) return res.json({ users: [] });
+    const blockers = new Set(await db.blockersOf(req.user.id));
+    const users = await db.findByExactName(q, req.user.id);
+    res.json({ users: users.map((u) => ({ ...u, online: false, lastSeen: null, avatarAt: blockers.has(u.id) ? null : u.avatarAt })) });
+  });
+
+  // People with an accepted private chat: the starting list for new chats and groups.
+  app.get("/api/contacts", requireUser, async (req, res) => {
+    const hidden = new Set([...(await db.blockersOf(req.user.id)), ...(await db.blockedBy(req.user.id))]);
+    const users = (await db.contacts(req.user.id)).filter((u) => !hidden.has(u.id));
     res.json({ users: users.map((u) => ({ ...u, online: isOnline(u.id) })) });
   });
 
   app.get("/api/conversations", requireUser, async (req, res) => {
-    res.json({ conversations: withPresence(await db.conversationsFor(req.user.id)) });
+    res.json({ conversations: await withPresence(await db.conversationsFor(req.user.id), req.user.id) });
+  });
+
+  // Message requests: accept, or delete (the sender is not told).
+  app.post("/api/conversations/:id/accept", requireUser, async (req, res) => {
+    const id = toId(req.params.id);
+    const status = id && (await db.memberStatus(id, req.user.id));
+    if (!status) return res.status(404).json({ error: "Chat non trovata." });
+    await db.setMemberStatus(id, req.user.id, "accepted");
+    await pushSummaries(id);
+    res.json({ conversation: await summary(req.user.id, id) });
+  });
+
+  app.post("/api/conversations/:id/decline", requireUser, async (req, res) => {
+    const id = toId(req.params.id);
+    if (!id || !(await db.memberStatus(id, req.user.id))) return res.status(404).json({ error: "Chat non trovata." });
+    await db.setMemberStatus(id, req.user.id, "declined");
+    io.to(userRoom(req.user.id)).emit("conversation:removed", { id });
+    res.json({ ok: true });
+  });
+
+  // ---------- blocking ----------
+  app.get("/api/blocks", requireUser, async (req, res) => {
+    const users = [];
+    for (const id of await db.blockedBy(req.user.id)) {
+      const u = await db.findUserById(id);
+      if (u) users.push({ id: u.id, username: u.username });
+    }
+    res.json({ users });
+  });
+
+  const afterBlockChange = async (me, other) => {
+    // The other person immediately stops (or starts again) seeing me online and my photo.
+    const blocked = (await db.blockedBy(me)).includes(other);
+    const meRow = await db.findUserById(me);
+    io.to(userRoom(other)).emit("presence", { userId: me, online: blocked ? false : isOnline(me), lastSeen: blocked ? null : meRow?.lastSeen ?? null });
+    io.to(userRoom(other)).emit("profile", { userId: me, avatarAt: blocked ? null : meRow?.avatarAt ?? null });
+    const { id: convId } = await db.findDirect(me, other);
+    if (convId) {
+      for (const who of [me, other]) {
+        const view = await summary(who, convId);
+        if (view) io.to(userRoom(who)).emit("conversation:update", view);
+      }
+    }
+  };
+
+  app.post("/api/blocks", requireUser, async (req, res) => {
+    const other = toId(req.body?.userId);
+    if (!other || other === req.user.id || !(await db.findUserById(other))) return res.status(400).json({ error: "Persona non trovata." });
+    await db.block(req.user.id, other);
+    // A pending request from someone you block goes away.
+    const { id: convId } = await db.findDirect(req.user.id, other);
+    if (convId && (await db.memberStatus(convId, req.user.id)) === "pending") {
+      await db.setMemberStatus(convId, req.user.id, "declined");
+      io.to(userRoom(req.user.id)).emit("conversation:removed", { id: convId });
+    }
+    await afterBlockChange(req.user.id, other);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/blocks/:userId", requireUser, async (req, res) => {
+    const other = toId(req.params.userId);
+    if (!other) return res.status(400).json({ error: "Persona non trovata." });
+    await db.unblock(req.user.id, other);
+    await afterBlockChange(req.user.id, other);
+    res.json({ ok: true });
   });
 
   // { userId } opens (or reuses) a private chat; { name, userIds } creates a group.
@@ -147,15 +270,26 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       if (!other || other === me || !(await db.findUserById(other))) {
         return res.status(400).json({ error: "Persona non trovata." });
       }
+      if ((await db.blockedBy(me)).includes(other)) {
+        return res.status(403).json({ error: "Hai bloccato questa persona: sbloccala per scriverle." });
+      }
+      if ((await db.blockedBy(other)).includes(me)) return res.status(403).json({ error: "Non puoi scrivere a questa persona." });
       ({ id, created } = await db.findOrCreateDirect(me, other));
+      // Writing to someone whose request you had not answered accepts it.
+      if (!created && (await db.memberStatus(id, me)) !== "accepted") {
+        await db.setMemberStatus(id, me, "accepted");
+        await pushSummaries(id);
+      }
     } else {
       const name = String(body.name ?? "").trim();
       const userIds = Array.isArray(body.userIds) ? [...new Set(body.userIds.map(toId).filter(Boolean))].filter((u) => u !== me) : [];
       if (!name || name.length > 40) return res.status(400).json({ error: "Dai al gruppo un nome (massimo 40 caratteri)." });
       if (!userIds.length) return res.status(400).json({ error: "Scegli almeno una persona da aggiungere al gruppo." });
       if (userIds.length >= MAX_GROUP) return res.status(400).json({ error: `Un gruppo può avere al massimo ${MAX_GROUP} persone.` });
+      const blockers = new Set(await db.blockersOf(me));
       for (const u of userIds) {
         if (!(await db.findUserById(u))) return res.status(400).json({ error: "Una delle persone scelte non esiste più." });
+        if (blockers.has(u)) return res.status(403).json({ error: "Una delle persone scelte non può essere aggiunta al gruppo." });
       }
       id = await db.createGroup(name, me, userIds);
       created = true;
@@ -292,7 +426,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     const user = socket.data.user;
     socket.join(userRoom(user.id));
     online.set(user.id, (online.get(user.id) ?? 0) + 1);
-    if (online.get(user.id) === 1) io.emit("presence", { userId: user.id, online: true, lastSeen: null });
+    if (online.get(user.id) === 1) announcePresence(user.id, { userId: user.id, online: true, lastSeen: null }).catch((e) => console.error(e));
 
     const handle = (event, fn) =>
       socket.on(event, async (payload, ack) => {
@@ -310,6 +444,12 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       const body = typeof text === "string" ? text.trim() : "";
       if (body.length > MAX_MESSAGE) return reply({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
       if (!id || !(await db.isMember(id, user.id))) return reply({ error: "Chat non trovata." });
+      if ((await db.memberStatus(id, user.id)) !== "accepted") return reply({ error: "Accetta la richiesta per rispondere." });
+      const partner = await db.directPartner(id, user.id);
+      if (partner && (await db.blockedBy(user.id)).includes(partner)) {
+        return reply({ error: "Hai bloccato questa persona: sbloccala per scriverle." });
+      }
+      if (partner && (await db.blockedBy(partner)).includes(user.id)) return reply({ error: "Non puoi scrivere a questa persona." });
       let attachment = null;
       if (attachmentId !== undefined && attachmentId !== null) {
         attachment = await db.attachmentInfo(toId(attachmentId) ?? 0);
@@ -322,7 +462,16 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       reply({ message });
       const members = await db.memberIds(id);
       for (const m of members) io.to(userRoom(m)).emit("message:new", message);
-      notify(id, message, members.filter((m) => m !== user.id && !isLooking(m)));
+      const others = members.filter((m) => m !== user.id && !isLooking(m));
+      const pending = [];
+      for (const m of others) if ((await db.memberStatus(id, m)) === "pending") pending.push(m);
+      notify(id, message, others.filter((m) => !pending.includes(m)));
+      // Message requests get a gentler notification that does not show the text.
+      if (pending.length) {
+        push.send(pending, {
+          title: "Richiesta di messaggio", body: `${user.username} vuole scriverti`, conversationId: id, tag: `r${id}`,
+        }).catch((err) => console.error(err));
+      }
     });
 
     // Only the author can change a message: text edits within 24 hours,
@@ -363,21 +512,26 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       visible.set(user.id, sockets);
     });
 
+    // Someone who has not accepted a request does not reveal receipts or typing.
+    const accepted = async (id) => (await db.memberStatus(id, user.id)) === "accepted";
+
     handle("delivered", async ({ conversationId, messageId }) => {
       const id = toId(conversationId), mid = toId(messageId);
-      if (!id || !mid || !(await db.isMember(id, user.id))) return;
+      if (!id || !mid || !(await accepted(id))) return;
       await toMembers(id, "receipt", await db.markDelivered(id, user.id, mid));
     });
 
     handle("read", async ({ conversationId, messageId }) => {
       const id = toId(conversationId), mid = toId(messageId);
-      if (!id || !mid || !(await db.isMember(id, user.id))) return;
+      if (!id || !mid || !(await accepted(id))) return;
       await toMembers(id, "receipt", await db.markRead(id, user.id, mid));
     });
 
     handle("typing", async ({ conversationId, typing }) => {
       const id = toId(conversationId);
-      if (!id || !(await db.isMember(id, user.id))) return;
+      if (!id || !(await accepted(id))) return;
+      const partner = await db.directPartner(id, user.id);
+      if (partner && (await db.eitherBlocked(user.id, partner))) return;
       await toMembers(id, "typing", { conversationId: id, user, typing: Boolean(typing) }, user.id);
     });
 
@@ -387,7 +541,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
       if (left > 0) return online.set(user.id, left);
       online.delete(user.id);
       const lastSeen = Date.now();
-      io.emit("presence", { userId: user.id, online: false, lastSeen });
+      announcePresence(user.id, { userId: user.id, online: false, lastSeen }).catch((e) => console.error(e));
       try { await db.touchLastSeen(user.id); } catch (err) { console.error(err); }
     });
   });

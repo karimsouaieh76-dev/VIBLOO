@@ -41,7 +41,9 @@ after(async () => {
   sockets.forEach((s) => s.close());
   server.io.close();
   server.httpServer.close();
+  pushService.closeAllConnections();
   pushService.close();
+  https.globalAgent.destroy();
   await server.db.close();
 });
 
@@ -63,6 +65,11 @@ const waitFor = async (cond, ms = 3000) => {
   return false;
 };
 const b64url = (buf) => buf.toString("base64url");
+
+test("prova notifiche", async () => {
+  const u = await post("/api/register", null, { username: "zia", password: "password123" });
+  assert.equal((await post("/api/push/test", u.token, {})).devices, 0);
+});
 
 test("notifica push a chi non ha l'app aperta", async () => {
   const anna = await post("/api/register", null, { username: "anna", password: "password123" });
@@ -93,6 +100,14 @@ test("notifica push a chi non ha l'app aperta", async () => {
   await new Promise((r) => setTimeout(r, 100));
   await sa.emitWithAck("message:send", { conversationId: conversation.id, text: "Ok ti vedo online" });
   assert.equal(await waitFor(() => received.length > 1, 600), false, "nessuna notifica con l'app aperta");
+
+  // A call always rings the phone, even if it still looks "on screen",
+  // and the notification expires with the ringing.
+  const ringing = await sa.emitWithAck("call:invite", { conversationId: conversation.id, media: "audio" });
+  assert.ok(await waitFor(() => received.length === 2), "notifica di chiamata anche con l'app aperta");
+  assert.equal(received[1].headers.ttl, "45");
+  await sa.emitWithAck("call:hangup", { callId: ringing.callId });
+  received.splice(1, 1);
 
   // App in background again: notifications resume.
   sb.emit("visibility", { visible: false });

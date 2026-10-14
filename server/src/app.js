@@ -37,9 +37,15 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
   // userId -> number of open connections
   const online = new Map();
   const isOnline = (id) => (online.get(id) ?? 0) > 0;
-  // userId -> sockets whose app is on screen; those people get no push.
+  // userId -> (socketId -> last "I'm on screen" ping). A phone that closes the
+  // app often cannot say so, so a ping counts only for 30 seconds.
   const visible = new Map();
-  const isLooking = (id) => (visible.get(id)?.size ?? 0) > 0;
+  const LOOKING_FOR = 30 * 1000;
+  const isLooking = (id) => {
+    const now = Date.now();
+    for (const at of visible.get(id)?.values() ?? []) if (now - at < LOOKING_FOR) return true;
+    return false;
+  };
 
   // Adds live "online" flags to conversation summaries.
   const withPresence = (convs) =>
@@ -202,6 +208,13 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     await db.savePushSubscription(req.user.id, sub);
     res.json({ ok: true });
   });
+  // "Prova notifiche": sends a notification to the user's own devices.
+  app.post("/api/push/test", requireUser, async (req, res) => {
+    const sent = await push.send([req.user.id], {
+      title: "Vibloo", body: "Le notifiche funzionano ✓", tag: "test",
+    });
+    res.json({ devices: sent });
+  });
   app.post("/api/push/unsubscribe", requireUser, async (req, res) => {
     if (typeof req.body?.endpoint === "string") await db.deletePushSubscription(req.body.endpoint);
     res.json({ ok: true });
@@ -317,9 +330,9 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     calls.attach(socket, user, handle);
 
     handle("visibility", async ({ visible: on }) => {
-      const set = visible.get(user.id) ?? new Set();
-      if (on) set.add(socket.id); else set.delete(socket.id);
-      visible.set(user.id, set);
+      const sockets = visible.get(user.id) ?? new Map();
+      if (on) sockets.set(socket.id, Date.now()); else sockets.delete(socket.id);
+      visible.set(user.id, sockets);
     });
 
     handle("delivered", async ({ conversationId, messageId }) => {

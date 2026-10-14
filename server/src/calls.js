@@ -79,15 +79,15 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
       reply({ callId: call.id, to: call.to });
 
       io.to(userRoom(other.id)).emit("call:incoming", incomingPayload(call));
-      if (!isLooking(other.id)) {
-        push.send([other.id], {
-          title: user.username,
-          body: kind === "video" ? "📹 Videochiamata in arrivo" : "📞 Chiamata in arrivo",
-          conversationId: convId,
-          tag: `call-${call.id}`,
-          call: true,
-        }).catch((err) => console.error(err));
-      }
+      // Always notify: a phone that just closed the app may still look "on screen".
+      // A late notification is useless, so it expires with the ringing.
+      push.send([other.id], {
+        title: user.username,
+        body: kind === "video" ? "📹 Videochiamata in arrivo" : "📞 Chiamata in arrivo",
+        conversationId: convId,
+        tag: `call-${call.id}`,
+        call: true,
+      }, { ttl: Math.ceil(RING_TIMEOUT / 1000) }).catch((err) => console.error(err));
     });
 
     handle("call:accept", async ({ callId }, reply) => {
@@ -102,14 +102,16 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
       socket.to(userRoom(user.id)).emit("call:ended", { callId, reason: "answered_elsewhere" });
     });
 
-    handle("call:decline", async ({ callId }) => {
+    handle("call:decline", async ({ callId }, reply) => {
       const call = calls.get(callId);
       if (call && call.to.id === user.id && !call.answeredAt) await end(call, "declined", user.id);
+      reply({ ok: true });
     });
 
-    handle("call:hangup", async ({ callId }) => {
+    handle("call:hangup", async ({ callId }, reply) => {
       const call = calls.get(callId);
       if (call && (call.from.id === user.id || call.to.id === user.id)) await end(call, "hangup", user.id);
+      reply({ ok: true });
     });
 
     // Connection setup (SDP offers/answers and ICE candidates), passed to the other device.

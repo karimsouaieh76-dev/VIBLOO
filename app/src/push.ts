@@ -39,10 +39,17 @@ export async function enablePush(api: Api): Promise<PushState> {
 }
 
 // Makes sure the server has this device's current subscription.
-export async function syncPush(api: Api) {
+// With `fresh`, drops the current subscription first: browsers sometimes let
+// one expire without saying so.
+export async function syncPush(api: Api, fresh = false) {
   if (pushState() !== "granted") return;
   const reg = await navigator.serviceWorker.ready;
   let sub = await reg.pushManager.getSubscription();
+  if (sub && fresh) {
+    await api.pushUnsubscribe(sub.endpoint).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+    sub = null;
+  }
   if (!sub) {
     const { publicKey } = await api.pushKey();
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64ToBytes(publicKey) });

@@ -19,21 +19,26 @@ export async function createPush(db) {
 
   return {
     publicKey,
-    async send(userIds, payload) {
+    // Resolves to the number of devices the push service accepted.
+    async send(userIds, payload, { ttl = 60 * 60 * 24 } = {}) {
       const subs = await db.pushSubscriptionsFor(userIds);
+      let delivered = 0;
       await Promise.all(subs.map(async (s) => {
         try {
           await webpush.sendNotification(
             { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
             JSON.stringify(payload),
-            { TTL: 60 * 60 * 24, urgency: "high", topic: payload.tag },
+            // The push "topic" must be at most 32 URL-safe characters, or the push is refused.
+            { TTL: ttl, urgency: "high", topic: /^[A-Za-z0-9_-]{1,32}$/.test(payload.tag ?? "") ? payload.tag : undefined },
           );
+          delivered += 1;
         } catch (err) {
           // The browser dropped this subscription (app removed, permission revoked).
           if (err.statusCode === 404 || err.statusCode === 410) await db.deletePushSubscription(s.endpoint);
           else console.error("Notifica non inviata:", err.statusCode ?? err.message);
         }
       }));
+      return delivered;
     },
   };
 }

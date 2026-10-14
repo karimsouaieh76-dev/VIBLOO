@@ -159,6 +159,20 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     };
   }, [serverUrl, token, api, me.id, refreshConversations, markRead]);
 
+  // Tell the server the app is on screen, again every 20 s: a phone that
+  // closes the app often cannot say so, and the server stops trusting an old
+  // ping after 30 s, so notifications start again.
+  useEffect(() => {
+    const ping = () => { if (appVisible()) emit("visibility", { visible: true }); };
+    const timer = setInterval(ping, 20000);
+    const hide = () => emit("visibility", { visible: false });
+    if (Platform.OS === "web") window.addEventListener("pagehide", hide);
+    return () => {
+      clearInterval(timer);
+      if (Platform.OS === "web") window.removeEventListener("pagehide", hide);
+    };
+  }, []);
+
   // Opening a chat (or coming back to the app) reads its messages.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {

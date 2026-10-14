@@ -5,7 +5,7 @@ import type { Api, Conversation, User } from "../api";
 import type { Messenger } from "../useMessenger";
 import { Avatar, Ticks } from "../components";
 import { conversationTitle, formatListDate, messagePreview, messageStatus, otherMembers } from "../format";
-import { enablePush, pushState, PushState } from "../push";
+import { enablePush, pushState, PushState, syncPush } from "../push";
 import { Theme, useTheme } from "../theme";
 
 type Props = {
@@ -24,6 +24,31 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }:
   const [query, setQuery] = useState("");
   const [push, setPush] = useState<PushState>(pushState());
   const [pushError, setPushError] = useState("");
+  const [pushInfo, setPushInfo] = useState("");
+
+  async function testPush() {
+    setPushError("");
+    setPushInfo("Invio in corso…");
+    try {
+      const { devices } = await api.pushTest();
+      setPushInfo(devices
+        ? `Notifica inviata a ${devices === 1 ? "1 dispositivo" : `${devices} dispositivi`}. Se non la vedi, controlla le impostazioni notifiche del telefono.`
+        : "Nessun dispositivo iscritto: tocca \"Riattiva notifiche\".");
+    } catch (e) {
+      setPushInfo("");
+      setPushError((e as Error).message);
+    }
+  }
+
+  async function resubscribe() {
+    setPushError("");
+    try {
+      await syncPush(api, true);
+      setPushInfo("Notifiche riattivate su questo dispositivo.");
+    } catch {
+      setPushError("Non sono riuscito a riattivare le notifiche. Riprova più tardi.");
+    }
+  }
   useEffect(() => setPush(pushState()), []);
 
   async function turnOnPush() {
@@ -66,6 +91,14 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onLogout }:
         <Text style={s.pushOff}>Notifiche bloccate: puoi riattivarle dalle impostazioni del browser per questo sito.</Text>
       )}
       {pushError ? <Text style={s.pushOff}>{pushError}</Text> : null}
+      {push === "granted" && (
+        <View style={s.pushRow}>
+          <Pressable onPress={testPush} hitSlop={6} accessibilityRole="button"><Text style={s.pushLink}>Prova notifiche</Text></Pressable>
+          <Text style={{ color: t.muted }}>·</Text>
+          <Pressable onPress={resubscribe} hitSlop={6} accessibilityRole="button"><Text style={s.pushLink}>Riattiva notifiche</Text></Pressable>
+        </View>
+      )}
+      {pushInfo ? <Text style={s.pushOff}>{pushInfo}</Text> : null}
       <View style={s.searchWrap}>
         <TextInput
           style={s.search} value={query} onChangeText={setQuery} placeholder="Cerca nelle chat"
@@ -154,6 +187,8 @@ const styles = (t: Theme) => StyleSheet.create({
   bannerText: { flex: 1, color: t.fg, fontSize: 14, lineHeight: 19 },
   bannerButton: { backgroundColor: t.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
   bannerButtonText: { color: t.accentFg, fontWeight: "700" },
+  pushRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 20, paddingTop: 2 },
+  pushLink: { color: t.accent, fontSize: 12.5, fontWeight: "600" },
   pushOff: { color: t.muted, fontSize: 12.5, paddingHorizontal: 20, paddingTop: 4 },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 8 },
   search: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: t.fg },

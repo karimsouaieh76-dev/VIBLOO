@@ -114,6 +114,7 @@ export function createApi(baseUrl: string, token?: string) {
     callConfig: () => request<{ iceServers: RTCIceServer[] }>("/api/call-config"),
     pushKey: () => request<{ publicKey: string }>("/api/push/key"),
     pushSubscribe: (subscription: unknown) => post<{ ok: true }>("/api/push/subscribe", { subscription }),
+    pushTest: () => post<{ devices: number }>("/api/push/test", {}),
     pushUnsubscribe: (endpoint: string) => post<{ ok: true }>("/api/push/unsubscribe", { endpoint }),
   };
 }

@@ -38,27 +38,34 @@ Da terminale è lo stesso: `cd server && npm install && npm start`.
 
 ## Metterla online (gratis)
 
-Servono tre account gratuiti: **GitHub** (per il codice), **Neon** (il database dove restano
-salvati i messaggi) e **Render** (il server che tiene accesa la chat).
+Servono tre account gratuiti: **GitHub** (per il codice), un database Postgres dove restano
+salvati i messaggi (**Supabase** oppure **Neon**) e **Render** (il server che tiene accesa la chat).
 
 1. **GitHub** — su <https://github.com/new> crea un repository chiamato `vibloo` e carica
    tutti i file di questa cartella ("uploading an existing file", trascinando i file).
-2. **Neon** — su <https://neon.tech> crea un progetto (regione Europa). Nella pagina
-   *Connect* copia la **connection string**, quella che inizia con `postgresql://`.
+2. **Database**, uno dei due:
+   - **Supabase** — su <https://supabase.com> crea un progetto (regione Europa, password con
+     sole lettere e numeri). Premi **Connect**, scegli **Session pooler** e copia l'indirizzo
+     `postgresql://…`, sostituendo `[YOUR-PASSWORD]` con la password del progetto.
+     Non usare "Direct connection": funziona solo in IPv6 e Render non lo supporta.
+     Nel piano gratuito un progetto senza attività per 7 giorni viene messo in pausa: si
+     riattiva dal pannello di Supabase.
+   - **Neon** — su <https://neon.tech> crea un progetto (regione Europa). Nella pagina
+     *Connect* copia la **connection string**, quella che inizia con `postgresql://`.
 3. **Render** — apri questo link, sostituendo `TUONOME` con il tuo nome utente GitHub:
 
    `https://render.com/deploy?repo=https://github.com/TUONOME/vibloo`
 
-   Accedi con GitHub, incolla la connection string di Neon nel campo `DATABASE_URL` e
+   Accedi con GitHub, incolla l'indirizzo del database nel campo `DATABASE_URL` e
    premi **Deploy**.
 
 Dopo qualche minuto Render ti dà l'indirizzo, per esempio `https://vibloo-abcd.onrender.com`.
 Mandalo a chi vuoi: lo apre dal telefono e sceglie "Aggiungi a schermata Home".
 
 Nel piano gratuito di Render il server si addormenta dopo 15 minuti senza visite: la prima
-apertura successiva impiega circa un minuto. I messaggi non si perdono, perché stanno su Neon.
-Anche foto, vocali e file sono salvati su Neon: il piano gratuito ha 0,5 GB, cioè qualche
-migliaio di foto.
+apertura successiva impiega circa un minuto. I messaggi non si perdono, perché stanno nel database.
+Anche foto, vocali e file sono salvati lì: i piani gratuiti di Supabase e Neon hanno circa
+0,5 GB, cioè qualche migliaio di foto.
 Ogni modifica caricata su GitHub viene pubblicata da sola.
 
 `Dockerfile` serve se preferisci un altro servizio (Railway, Fly.io, una VPS).
@@ -83,7 +90,7 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | Variabile    | Default         | Note                                       |
 |--------------|-----------------|--------------------------------------------|
 | `PORT`       | `3000`          |                                            |
-| `DATABASE_URL` | —             | Postgres (es. Neon); se manca usa il file SQLite |
+| `DATABASE_URL` | —             | Postgres (Supabase, Neon…); se manca usa il file SQLite |
 | `DB_FILE`    | `vibloo.db`    | file SQLite                                |
 | `JWT_SECRET` | generata        | se manca viene creata e salvata accanto al database |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |

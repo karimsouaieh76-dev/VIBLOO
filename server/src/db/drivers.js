@@ -16,7 +16,7 @@ export async function sqliteDriver(file) {
 export async function postgresDriver(connectionString) {
   const { default: pg } = await import("pg");
   pg.types.setTypeParser(20, Number); // BIGINT and count(*) as numbers
-  const pool = new pg.Pool({ ...postgresConfig(connectionString), max: 5 });
+  const pool = new pg.Pool({ ...postgresConfig(connectionString), max: 3, connectionTimeoutMillis: 10000 });
   const toPg = (sql) => { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); };
   return {
     dialect: "postgres",

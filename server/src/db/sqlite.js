@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export function openDb(file) {
+export function openSqlite(file) {
   const db = new DatabaseSync(file);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -54,7 +54,7 @@ export function openDb(file) {
   };
 
   return {
-    raw: db,
+    close: () => db.close(),
     createUser: (username, hash) => q.insertUser.get(username, hash, Date.now()),
     findUserByName: (username) => q.userByName.get(username),
     findUserById: (id) => q.userById.get(id),

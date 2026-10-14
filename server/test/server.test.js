@@ -6,14 +6,16 @@ import { createServer } from "../src/app.js";
 let server, base;
 
 before(async () => {
-  server = createServer({ dbFile: ":memory:", secret: "test-secret" });
+  // TEST_DATABASE_URL runs the same tests against Postgres.
+  server = await createServer({ dbFile: ":memory:", databaseUrl: process.env.TEST_DATABASE_URL, secret: "test-secret" });
   await new Promise((r) => server.httpServer.listen(0, r));
   base = `http://127.0.0.1:${server.httpServer.address().port}`;
 });
 
-after(() => {
+after(async () => {
   server.io.close();
   server.httpServer.close();
+  await server.db.close();
 });
 
 const post = (path, body, token) =>
@@ -71,7 +73,7 @@ test("canali e messaggi in tempo reale", async () => {
   sa.emit("typing", { channelId: channels[0].id, typing: true });
   assert.equal((await typing).user.username, "bruno");
 
-  const history = await (await get(`/api/channels/${channels[0].id}/messages`, b.token)).json();
+  const history = await (await get(`/api/channels/${channels[0].id}/messages?before=abc`, b.token)).json();
   assert.equal(history.messages.at(-1).text, "Ciao a tutti!");
 
   const bad = connect(base, { auth: { token: "nope" }, transports: ["websocket"], reconnection: false });

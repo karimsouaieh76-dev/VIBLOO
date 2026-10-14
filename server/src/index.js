@@ -25,8 +25,14 @@ function lanAddresses() {
     .map((i) => `http://${i.address}:${PORT}`);
 }
 
-const { httpServer } = createServer({ dbFile: DB_FILE, secret: loadSecret() });
+const { httpServer } = await createServer({
+  dbFile: DB_FILE,
+  databaseUrl: process.env.DATABASE_URL,
+  secret: loadSecret(),
+});
+const online = Boolean(process.env.RENDER || process.env.DATABASE_URL);
 httpServer.listen(PORT, "0.0.0.0", () => {
+  if (online) return console.log(`Cortile in ascolto sulla porta ${PORT}`);
   const lan = lanAddresses();
   console.log("\n  Cortile è acceso.\n");
   console.log(`  Su questo computer:  http://localhost:${PORT}`);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import type { Socket } from "socket.io-client";
 import type { Api, User } from "./api";
+import { mediaErrorMessage } from "./mediaErrors";
 
 // Voice and video calls with WebRTC. Audio and video go straight between the
 // two devices; the socket only carries ringing and the connection setup.
@@ -124,10 +125,20 @@ export function useCalls(socket: Socket | null, api: Api) {
   }, [cleanup]);
 
   async function getMedia(media: CallMedia) {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: media === "video" ? { facingMode: facing.current, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    });
+    const audio = { echoCancellation: true, noiseSuppression: true };
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio,
+        video: media === "video" ? { facingMode: facing.current, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      // No usable camera: still join the video call with voice only.
+      const name = (err as { name?: string })?.name;
+      if (media !== "video" || name === "NotAllowedError" || name === "SecurityError") throw err;
+      stream = await navigator.mediaDevices.getUserMedia({ audio });
+      update({ cameraOff: true });
+    }
     local.current = stream;
     setLocalStream(stream);
     return stream;
@@ -166,12 +177,10 @@ export function useCalls(socket: Socket | null, api: Api) {
     update({ id: null, conversationId, peer, media, phase: "outgoing", startedAt: null, muted: false, cameraOff: false });
     try {
       await getMedia(media);
-    } catch {
+    } catch (err) {
       update(null);
       cleanup();
-      return setError(media === "video"
-        ? "Per videochiamare consenti a Vibloo di usare fotocamera e microfono."
-        : "Per chiamare consenti a Vibloo di usare il microfono.");
+      return setError(mediaErrorMessage(err, media === "video" ? "video" : "call"));
     }
     const res = await socket.emitWithAck("call:invite", { conversationId, media });
     if (res.error) {
@@ -190,10 +199,10 @@ export function useCalls(socket: Socket | null, api: Api) {
     tones.current.stop();
     try {
       await getMedia(c.media);
-    } catch {
+    } catch (err) {
       socket.emit("call:decline", { callId: c.id });
       finish("hangup");
-      return setError("Per rispondere consenti a Vibloo di usare microfono e fotocamera.");
+      return setError(mediaErrorMessage(err, c.media === "video" ? "video" : "call"));
     }
     update({ phase: "connecting" });
     // Ready before saying yes: the caller's offer arrives right after.

@@ -16,6 +16,7 @@ import {
   parseCall, Status,
 } from "../format";
 import { pickFile, pickPhoto, webRecordingMime } from "../media";
+import { mediaErrorMessage } from "../mediaErrors";
 import { avatarColor, Theme, useTheme } from "../theme";
 
 type Props = {
@@ -169,13 +170,13 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
     setError("");
     try {
       const perm = await requestRecordingPermissionsAsync();
-      if (!perm.granted) return setError("Per i messaggi vocali consenti a Vibloo di usare il microfono.");
+      if (!perm.granted) return setError(mediaErrorMessage({ name: "NotAllowedError" }, "voice"));
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
       setRecording(true);
-    } catch {
-      setError("Non riesco ad avviare il microfono su questo dispositivo.");
+    } catch (err) {
+      setError(mediaErrorMessage(err, "voice"));
     }
   }
 

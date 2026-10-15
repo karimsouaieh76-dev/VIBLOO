@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, Conversation, createApi, DEFAULT_SERVER_URL, SAME_ORIGIN, User } from "./src/api";
 import { getItem, removeItem, setItem } from "./src/storage";
 import { disablePush, registerServiceWorker, syncPush } from "./src/push";
@@ -60,6 +60,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <StatusBar style="auto" />
+      <MovedBanner />
       {booting ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bg }}>
           <ActivityIndicator color={t.accent} />
@@ -174,3 +175,22 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
 const callErrorStyle = {
   position: "absolute" as const, left: 16, right: 16, bottom: 90, padding: 14, borderRadius: 12, backgroundColor: "#a33a2a",
 };
+
+
+// Vibloo now lives at vibloo.it: the old onrender.com address points people there.
+const NEW_HOME = "https://vibloo.it";
+function MovedBanner() {
+  const insets = useSafeAreaInsets();
+  if (Platform.OS !== "web" || typeof window === "undefined" || !window.location.hostname.endsWith(".onrender.com")) return null;
+  const target = NEW_HOME + window.location.pathname + window.location.search;
+  return (
+    <Pressable
+      onPress={() => window.open(target, "_blank")} accessibilityRole="link"
+      style={{ backgroundColor: "#f5b400", paddingTop: insets.top + 10, paddingBottom: 10, paddingHorizontal: 16 }}
+    >
+      <Text style={{ color: "#1a1400", fontSize: 14.5, fontWeight: "600", textAlign: "center" }}>
+        Vibloo si è spostato su vibloo.it — tocca qui, aggiungilo alla schermata Home e poi elimina questa icona.
+      </Text>
+    </Pressable>
+  );
+}

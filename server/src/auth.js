@@ -19,11 +19,12 @@ export async function verifyPassword(password, stored) {
 
 export function makeTokens(secret) {
   return {
-    sign: (user) => jwt.sign({ sub: String(user.id), username: user.username }, secret, { expiresIn: "30d" }),
+    sign: (user, version = 0) =>
+      jwt.sign({ sub: String(user.id), username: user.username, v: version }, secret, { expiresIn: "30d" }),
     verify(token) {
       try {
         const p = jwt.verify(token, secret);
-        return { id: Number(p.sub), username: p.username };
+        return { id: Number(p.sub), username: p.username, v: Number(p.v) || 0 };
       } catch {
         return null;
       }

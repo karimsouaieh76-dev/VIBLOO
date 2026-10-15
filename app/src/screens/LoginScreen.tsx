@@ -15,7 +15,7 @@ type Props = {
 export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Props) {
   const t = useTheme();
   const s = styles(t);
-  const [mode, setMode] = useState<"login" | "register">(initialInvite ? "register" : "login");
+  const [mode, setMode] = useState<"login" | "register" | "reset">(initialInvite ? "register" : "login");
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [invite, setInvite] = useState(initialInvite ?? "");
   const [inviter, setInviter] = useState<string | null>(null);
@@ -33,18 +33,22 @@ export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Pro
   }, [invite, serverUrl]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [resetCode, setResetCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   async function submit() {
     setError("");
     if (!username.trim() || !password) return setError("Inserisci nome utente e password.");
+    if (mode === "reset" && !resetCode.trim()) return setError("Inserisci il codice di ripristino.");
     setBusy(true);
     try {
       const api = createApi(serverUrl.trim());
       const res = mode === "login"
         ? await api.login(username.trim(), password)
-        : await api.register(username.trim(), password, invite.trim() || undefined);
+        : mode === "reset"
+          ? await api.resetPassword(username.trim(), resetCode.trim(), password)
+          : await api.register(username.trim(), password, invite.trim() || undefined);
       onLoggedIn({ serverUrl: serverUrl.trim(), ...res });
     } catch (e) {
       setError((e as Error).message);
@@ -59,13 +63,22 @@ export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Pro
         <View style={{ marginBottom: 6 }}><Logo height={54} /></View>
         <Text style={s.tagline}>Scrivi a chi vuoi, subito.</Text>
 
-        <View style={s.tabs}>
-          {(["login", "register"] as const).map((m) => (
-            <Pressable key={m} onPress={() => { setMode(m); setError(""); }} style={[s.tab, mode === m && s.tabOn]}>
-              <Text style={[s.tabText, mode === m && s.tabTextOn]}>{m === "login" ? "Accedi" : "Registrati"}</Text>
-            </Pressable>
-          ))}
-        </View>
+        {mode === "reset" ? (
+          <>
+            <Text style={s.title}>Nuova password</Text>
+            <Text style={s.inviteHint}>
+              Chiedi un codice di ripristino a chi ti ha invitato su Vibloo: lo crea dal suo Profilo e vale 24 ore.
+            </Text>
+          </>
+        ) : (
+          <View style={s.tabs}>
+            {(["login", "register"] as const).map((m) => (
+              <Pressable key={m} onPress={() => { setMode(m); setError(""); }} style={[s.tab, mode === m && s.tabOn]}>
+                <Text style={[s.tabText, mode === m && s.tabTextOn]}>{m === "login" ? "Accedi" : "Registrati"}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {mode === "register" && (
           <>
@@ -90,11 +103,20 @@ export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Pro
           autoCapitalize="none" autoCorrect={false} autoComplete="username" placeholder="es. giulia.r"
           placeholderTextColor={t.muted}
         />
-        <Text style={s.label}>Password</Text>
+        {mode === "reset" && (
+          <>
+            <Text style={s.label}>Codice di ripristino</Text>
+            <TextInput
+              style={[s.input, s.mono]} value={resetCode} onChangeText={setResetCode}
+              autoCapitalize="characters" autoCorrect={false} placeholder="es. K7PM-3QXA" placeholderTextColor={t.muted}
+            />
+          </>
+        )}
+        <Text style={s.label}>{mode === "reset" ? "Nuova password" : "Password"}</Text>
         <TextInput
           style={s.input} value={password} onChangeText={setPassword} secureTextEntry
           autoComplete={mode === "login" ? "password" : "new-password"}
-          placeholder={mode === "register" ? "almeno 4 caratteri" : ""} placeholderTextColor={t.muted}
+          placeholder={mode === "login" ? "" : "almeno 4 caratteri"} placeholderTextColor={t.muted}
           onSubmitEditing={submit}
         />
         {!SAME_ORIGIN && (
@@ -111,9 +133,19 @@ export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Pro
 
         <Pressable style={[s.button, busy && { opacity: 0.6 }]} onPress={submit} disabled={busy}>
           {busy ? <ActivityIndicator color={t.accentFg} /> : (
-            <Text style={s.buttonText}>{mode === "login" ? "Accedi" : "Crea account"}</Text>
+            <Text style={s.buttonText}>
+              {mode === "login" ? "Accedi" : mode === "reset" ? "Imposta e accedi" : "Crea account"}
+            </Text>
           )}
         </Pressable>
+        {mode !== "register" && (
+          <Pressable
+            onPress={() => { setMode(mode === "reset" ? "login" : "reset"); setError(""); setPassword(""); }}
+            style={s.linkBtn} accessibilityRole="button"
+          >
+            <Text style={s.link}>{mode === "reset" ? "Torna ad accedere" : "Password dimenticata?"}</Text>
+          </Pressable>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -136,4 +168,7 @@ const styles = (t: Theme) => StyleSheet.create({
   error: { color: t.danger, marginTop: 8 },
   button: { backgroundColor: t.accent, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 20 },
   buttonText: { color: t.accentFg, fontWeight: "700", fontSize: 16 },
+  title: { fontSize: 22, fontWeight: "700", color: t.fg },
+  linkBtn: { alignSelf: "center", padding: 12 },
+  link: { color: t.accent, fontSize: 15, fontWeight: "600" },
 });

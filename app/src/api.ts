@@ -103,6 +103,12 @@ export function createApi(baseUrl: string, token?: string) {
     login: (username: string, password: string) =>
       post<{ token: string; user: User }>("/api/login", { username, password }),
     me: () => request<{ user: User }>("/api/me"),
+    changePassword: (current: string, password: string) =>
+      request<{ token: string }>("/api/me/password", { method: "PUT", body: JSON.stringify({ current, password }) }),
+    createPasswordReset: (username: string) =>
+      post<{ code: string; username: string; expiresAt: number }>("/api/password-resets", { username }),
+    resetPassword: (username: string, code: string, password: string) =>
+      post<{ token: string; user: User }>("/api/password/reset", { username, code, password }),
     searchUsers: (q: string) => request<{ users: Person[] }>(`/api/users?q=${encodeURIComponent(q)}`),
     conversations: () => request<{ conversations: Conversation[] }>("/api/conversations"),
     contacts: () => request<{ users: Person[] }>("/api/contacts"),

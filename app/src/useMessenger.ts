@@ -68,7 +68,9 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     }));
   }, [me.id]);
 
+  const [expired, setExpired] = useState(false);
   useEffect(() => {
+    setExpired(false);
     const socket = io(serverUrl, { auth: { token }, transports: ["websocket"] });
     socketRef.current = socket;
     setSocket(socket);
@@ -86,7 +88,14 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
         if (last) markRead(open, last.id);
       }
     });
-    socket.on("disconnect", () => setConnected(false));
+    socket.on("disconnect", (reason) => {
+      setConnected(false);
+      // The server closed it: maybe the password changed on another device.
+      if (reason === "io server disconnect") {
+        api.me().then(() => socket.connect(), (e) => { if (e?.status === 401) setExpired(true); });
+      }
+    });
+    socket.on("connect_error", (err) => { if (err.message === "unauthorized") setExpired(true); });
 
     // How a chat looks to me changed (request accepted, someone blocked, …).
     socket.on("conversation:update", (c: Conversation) =>
@@ -301,7 +310,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   }, [totalUnread]);
 
   return {
-    socket, myAvatarAt, setMyAvatarAt, connected, loaded, conversations, messages, typing, totalUnread,
+    expired, socket, myAvatarAt, setMyAvatarAt, connected, loaded, conversations, messages, typing, totalUnread,
     acceptRequest, declineRequest, setBlocked,
     openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
   };

@@ -66,7 +66,7 @@ export default function App() {
           <ActivityIndicator color={t.accent} />
         </View>
       ) : session ? (
-        <SignedIn session={session} onLogout={logout} />
+        <SignedIn session={session} onLogout={logout} onTokenChange={(token) => login({ ...session, token })} />
       ) : (
         <LoginScreen initialServerUrl={serverUrl} initialInvite={inviteFromUrl} onLoggedIn={login} />
       )}
@@ -96,13 +96,18 @@ function initialChatFromUrl(): number | null {
 
 type Screen = { name: "chats" } | { name: "new" } | { name: "profile" } | { name: "chat"; conversation: Conversation };
 
-function SignedIn({ session, onLogout }: { session: Session; onLogout: () => void }) {
+function SignedIn({ session, onLogout, onTokenChange }: {
+  session: Session; onLogout: () => void; onTokenChange: (token: string) => void;
+}) {
   const api = useMemo(() => createApi(session.serverUrl, session.token), [session]);
   const messenger = useMessenger(session.serverUrl, session.token, session.user, api);
   const calls = useCalls(messenger.socket, api);
   const [screen, setScreen] = useState<Screen>({ name: "chats" });
   const home = useCallback(() => setScreen({ name: "chats" }), []);
   const [wanted, setWanted] = useState<number | null>(initialChatFromUrl);
+
+  // Signed out elsewhere (e.g. the password was changed): back to the login screen.
+  useEffect(() => { if (messenger.expired) onLogout(); }, [messenger.expired]);
 
   // Keep this device's push subscription known to the server.
   useEffect(() => { syncPush(api).catch(() => {}); }, [api]);
@@ -137,7 +142,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
     content = (
       <ProfileScreen
         me={session.user} api={api} avatarAt={messenger.myAvatarAt} inviteBase={session.serverUrl}
-        onAvatarChanged={messenger.setMyAvatarAt} onBack={home} onLogout={onLogout}
+        onAvatarChanged={messenger.setMyAvatarAt} onBack={home} onLogout={onLogout} onTokenChange={onTokenChange}
       />
     );
   } else if (screen.name === "new") {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Api, User } from "../api";
@@ -18,9 +18,10 @@ type Props = {
   onBack: () => void;
   onLogout: () => void;
   inviteBase: string; // address invitation links point to
+  onTokenChange: (token: string) => void; // after a password change
 };
 
-export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLogout, inviteBase }: Props) {
+export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLogout, inviteBase, onTokenChange }: Props) {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
@@ -111,6 +112,8 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
         <Text style={s.hint}>La foto la vedono tutte le persone con cui chatti, tranne chi hai bloccato.</Text>
 
         <InviteSection api={api} base={inviteBase} t={t} />
+        <PasswordSection api={api} t={t} onTokenChange={onTokenChange} />
+        <ResetForFriendSection api={api} t={t} />
 
         <Text style={s.section}>Persone bloccate</Text>
         <View style={s.actions}>
@@ -174,7 +177,133 @@ const styles = (t: Theme) => StyleSheet.create({
     textTransform: "uppercase", letterSpacing: 0.8,
   },
   hint: { color: t.muted, fontSize: 13, textAlign: "center", marginTop: 4 },
+  input: {
+    backgroundColor: t.bg, borderWidth: 1, borderColor: t.line, borderRadius: 10, paddingHorizontal: 14,
+    paddingVertical: 11, fontSize: 16, color: t.fg,
+  },
+  small: { color: t.muted, fontSize: 13.5, lineHeight: 19 },
 });
+
+// "Cambia password": the other devices are signed out.
+function PasswordSection({ api, t, onTokenChange }: { api: Api; t: Theme; onTokenChange: (token: string) => void }) {
+  const s = styles(t);
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setNote("");
+    if (next.length < 4) return setNote("La nuova password deve avere almeno 4 caratteri.");
+    setBusy(true);
+    try {
+      const { token } = await api.changePassword(current, next);
+      setCurrent("");
+      setNext("");
+      setOpen(false);
+      onTokenChange(token);
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Text style={s.section}>Password</Text>
+      <View style={[s.actions, { padding: open ? 16 : 0, gap: 10 }]}>
+        {!open ? (
+          <Pressable style={({ pressed }) => [s.row, pressed && s.pressed]} onPress={() => setOpen(true)} accessibilityRole="button">
+            <Ionicons name="key-outline" size={22} color={t.accent} />
+            <Text style={s.rowText}>Cambia password</Text>
+          </Pressable>
+        ) : (
+          <>
+            <TextInput
+              style={s.input} value={current} onChangeText={setCurrent} secureTextEntry autoComplete="current-password"
+              placeholder="Password attuale" placeholderTextColor={t.muted}
+            />
+            <TextInput
+              style={s.input} value={next} onChangeText={setNext} secureTextEntry autoComplete="new-password"
+              placeholder="Nuova password (almeno 4 caratteri)" placeholderTextColor={t.muted} onSubmitEditing={save}
+            />
+            {note ? <Text style={s.error}>{note}</Text> : null}
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Pressable style={[s.inviteBtn, { flex: 1 }]} onPress={save} disabled={busy} accessibilityRole="button">
+                {busy ? <ActivityIndicator color={t.accentFg} /> : <Text style={s.inviteBtnText}>Salva</Text>}
+              </Pressable>
+              <Pressable
+                style={[s.inviteBtn, { flex: 1, backgroundColor: t.bg }]} accessibilityRole="button"
+                onPress={() => { setOpen(false); setNote(""); setCurrent(""); setNext(""); }}
+              >
+                <Text style={[s.inviteBtnText, { color: t.fg }]}>Annulla</Text>
+              </Pressable>
+            </View>
+            <Text style={s.small}>Sugli altri dispositivi dovrai accedere di nuovo con la nuova password.</Text>
+          </>
+        )}
+      </View>
+    </>
+  );
+}
+
+// A friend forgot the password: whoever invited them (or the admin) makes a one-time code.
+function ResetForFriendSection({ api, t }: { api: Api; t: Theme }) {
+  const s = styles(t);
+  const [username, setUsername] = useState("");
+  const [result, setResult] = useState<{ code: string; username: string } | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function create() {
+    setNote("");
+    setResult(null);
+    if (!username.trim()) return setNote("Scrivi il nome utente del tuo amico.");
+    setBusy(true);
+    try {
+      const r = await api.createPasswordReset(username.trim());
+      setResult(r);
+      setUsername("");
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Text style={s.section}>Un amico ha dimenticato la password?</Text>
+      <View style={[s.actions, { padding: 16, gap: 10 }]}>
+        <Text style={s.small}>
+          Se l'hai invitato tu, crea un codice di ripristino e daglielo (a voce, al telefono o in un messaggio fuori da Vibloo).
+          Lui tocca «Password dimenticata?» e sceglie una nuova password. Il codice vale 24 ore, una volta sola.
+        </Text>
+        <TextInput
+          style={s.input} value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false}
+          placeholder="Nome utente dell'amico" placeholderTextColor={t.muted} onSubmitEditing={create}
+        />
+        <Pressable style={s.inviteBtn} onPress={create} disabled={busy} accessibilityRole="button">
+          {busy ? <ActivityIndicator color={t.accentFg} /> : (
+            <>
+              <Ionicons name="key" size={18} color={t.accentFg} />
+              <Text style={s.inviteBtnText}>Crea codice di ripristino</Text>
+            </>
+          )}
+        </Pressable>
+        {result && (
+          <View style={s.freshBox}>
+            <Text style={s.small}>Codice per {result.username}:</Text>
+            <Text style={s.freshCode} selectable>{prettyCode(result.code)}</Text>
+          </View>
+        )}
+        {note ? <Text style={s.error}>{note}</Text> : null}
+      </View>
+    </>
+  );
+}
 
 const dateFmt = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long" });
 const prettyCode = (c: string) => `${c.slice(0, 4)}-${c.slice(4)}`;

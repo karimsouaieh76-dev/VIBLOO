@@ -65,3 +65,13 @@ httpServer.listen(PORT, "0.0.0.0", () => {
   }
   console.log("  Per spegnerlo chiudi questa finestra o premi Ctrl+C.\n");
 });
+
+// Render's free plan stops the server after 15 minutes without visits, and the
+// next person waits about a minute. Visiting ourselves every 10 minutes keeps
+// it awake (a month of uptime fits the 750 free hours). KEEP_AWAKE=false disables it.
+const publicUrl = process.env.RENDER_EXTERNAL_URL;
+if (publicUrl && process.env.KEEP_AWAKE !== "false") {
+  setInterval(() => {
+    fetch(`${publicUrl.replace(/\/+$/, "")}/api/health`).catch(() => {});
+  }, 10 * 60 * 1000);
+}

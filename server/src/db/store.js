@@ -117,6 +117,15 @@ export async function createStore(driver) {
     );
     CREATE INDEX IF NOT EXISTS invites_by_creator ON invites (created_by);
 
+    -- One-time codes to set a new password, made by the admin or the inviter.
+    CREATE TABLE IF NOT EXISTS password_resets (
+      code       TEXT PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at BIGINT NOT NULL,
+      used_at    BIGINT
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -132,6 +141,8 @@ export async function createStore(driver) {
     "users ADD COLUMN avatar_at BIGINT",
     // accepted | pending (a message request not answered yet) | declined
     "conversation_members ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'",
+    // Bumped when the password changes: older sessions stop working.
+    "users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
   ]) {
     try { await exec(`ALTER TABLE ${column}`); } catch { /* already there */ }
   }
@@ -389,6 +400,24 @@ export async function createStore(driver) {
     completeInvite: (code, userId) => query("UPDATE invites SET used_by = ? WHERE code = ?", [userId, code]),
     deleteInvite: async (code, userId) =>
       (await query("DELETE FROM invites WHERE code = ? AND created_by = ? AND claimed_at IS NULL RETURNING code", [code, userId])).length > 0,
+
+    // ---------- passwords ----------
+    tokenVersion: async (userId) =>
+      (await one("SELECT token_version AS v FROM users WHERE id = ?", [userId]))?.v ?? null,
+    setPassword: async (userId, hash) =>
+      (await one("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ? RETURNING token_version AS v",
+        [hash, userId]))?.v,
+    adminId: async () => (await one("SELECT min(id) AS id FROM users"))?.id ?? null,
+    inviterOf: async (userId) => (await one("SELECT created_by AS id FROM invites WHERE used_by = ?", [userId]))?.id ?? null,
+    createPasswordReset: async (code, userId, createdBy, ttlMs) => {
+      await query("DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL", [userId]);
+      await query("INSERT INTO password_resets (code, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)",
+        [code, userId, createdBy, Date.now() + ttlMs]);
+    },
+    // Uses the code once; returns the account it belongs to.
+    usePasswordReset: async (code, userId) =>
+      (await one(`UPDATE password_resets SET used_at = ? WHERE code = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?
+                  RETURNING user_id AS "userId"`, [Date.now(), code, userId, Date.now()]))?.userId ?? null,
 
     // ---------- settings ----------
     getSetting: async (key) => (await one("SELECT value FROM settings WHERE key = ?", [key]))?.value ?? null,

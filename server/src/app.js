@@ -14,6 +14,7 @@ const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
 const MAX_MESSAGE = 4000;
 const INVITE_TTL = 7 * 24 * 60 * 60 * 1000;
 const MAX_OPEN_INVITES = 20;
+const RESET_TTL = 24 * 60 * 60 * 1000;
 // Easy to read aloud or copy: no 0/O or 1/I/L.
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const newInviteCode = () => Array.from(randomBytes(8), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
@@ -116,13 +117,29 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
   app.use((req, res, next) => (req.path.endsWith("/attachments") || req.path === "/api/me/avatar" ? next() : json(req, res, next)));
 
   // Token from the Authorization header, or from ?token= for <img>/<audio> sources.
+  // A session ends when its password changes (token_version moves on) or the account is gone.
+  const versions = new Map(); // userId -> current token version
+  const sessionValid = async (user) => {
+    if (!user) return false;
+    if (!versions.has(user.id)) versions.set(user.id, await db.tokenVersion(user.id));
+    return versions.get(user.id) === user.v;
+  };
   const requireUser = (req, res, next) => {
     const header = req.get("authorization") || "";
     const user = tokens.verify(header.replace(/^Bearer\s+/i, "") || String(req.query.token ?? ""));
-    if (!user) return res.status(401).json({ error: "Sessione scaduta: accedi di nuovo." });
-    req.user = user;
-    next();
+    sessionValid(user).then((ok) => {
+      if (!ok) return res.status(401).json({ error: "Sessione scaduta: accedi di nuovo." });
+      req.user = user;
+      next();
+    }, next);
   };
+  // New password: remember the version and close the other devices' connections.
+  async function changePassword(userId, password) {
+    const v = await db.setPassword(userId, await hashPassword(password));
+    versions.set(userId, v);
+    for (const s of await io.in(userRoom(userId)).fetchSockets()) if (s.data.user.v !== v) s.disconnect(true);
+    return v;
+  }
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -225,7 +242,61 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     }
     failedLogins.delete(key);
     const user = { id: row.id, username: row.username };
-    res.json({ token: tokens.sign(user), user: { ...user, avatarAt: row.avatar_at ?? null } });
+    res.json({ token: tokens.sign(user, row.token_version ?? 0), user: { ...user, avatarAt: row.avatar_at ?? null } });
+  });
+
+  app.put("/api/me/password", requireUser, async (req, res) => {
+    const { current, password } = req.body ?? {};
+    const row = await db.findUserByName(req.user.username);
+    if (!row || typeof current !== "string" || !(await verifyPassword(current, row.password_hash))) {
+      return res.status(403).json({ error: "La password attuale non è corretta." });
+    }
+    if (typeof password !== "string" || password.length < 4) {
+      return res.status(400).json({ error: "La nuova password deve avere almeno 4 caratteri." });
+    }
+    const v = await changePassword(row.id, password);
+    res.json({ token: tokens.sign({ id: row.id, username: row.username }, v) });
+  });
+
+  // A forgotten password: the admin (first account) or whoever invited the
+  // person makes a one-time code, and passes it on in person or by phone.
+  app.post("/api/password-resets", requireUser, async (req, res) => {
+    const target = typeof req.body?.username === "string" ? await db.findUserByName(req.body.username.trim()) : null;
+    if (!target) return res.status(404).json({ error: "Nessun utente con questo nome." });
+    if (target.id === req.user.id) return res.status(400).json({ error: "Per la tua password usa «Cambia password»." });
+    const allowed = req.user.id === (await db.adminId()) || req.user.id === (await db.inviterOf(target.id));
+    if (!allowed) {
+      return res.status(403).json({ error: `Solo chi ha invitato ${target.username} o l'amministratore può creare il codice.` });
+    }
+    const code = newInviteCode();
+    await db.createPasswordReset(code, target.id, req.user.id, RESET_TTL);
+    res.status(201).json({ code, username: target.username, expiresAt: Date.now() + RESET_TTL });
+  });
+
+  app.post("/api/password/reset", async (req, res) => {
+    const { username, code, password } = req.body ?? {};
+    const key = `reset:${String(username ?? "").toLowerCase()}`;
+    const fails = failedLogins.get(key);
+    if (fails && fails.until > Date.now() && fails.count >= 10) {
+      return res.status(429).json({ error: "Troppi tentativi sbagliati. Riprova tra qualche minuto." });
+    }
+    if (typeof password !== "string" || password.length < 4) {
+      return res.status(400).json({ error: "La nuova password deve avere almeno 4 caratteri." });
+    }
+    const row = typeof username === "string" ? await db.findUserByName(username.trim()) : null;
+    const c = normalizeCode(code);
+    if (!row || !c || !(await db.usePasswordReset(c, row.id))) {
+      const now = Date.now();
+      const f = fails && fails.until > now ? fails : { count: 0, until: now + 15 * 60 * 1000 };
+      f.count += 1;
+      failedLogins.set(key, f);
+      return res.status(400).json({ error: "Codice non valido, già usato o scaduto. Chiedine uno nuovo." });
+    }
+    failedLogins.delete(key);
+    failedLogins.delete(row.username.toLowerCase());
+    const v = await changePassword(row.id, password);
+    const user = { id: row.id, username: row.username };
+    res.json({ token: tokens.sign(user, v), user: { ...user, avatarAt: row.avatar_at ?? null } });
   });
 
   app.get("/api/me", requireUser, async (req, res) => {
@@ -504,9 +575,11 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
 
   io.use((socket, next) => {
     const user = tokens.verify(socket.handshake.auth?.token);
-    if (!user) return next(new Error("unauthorized"));
-    socket.data.user = user;
-    next();
+    sessionValid(user).then((ok) => {
+      if (!ok) return next(new Error("unauthorized"));
+      socket.data.user = user;
+      next();
+    }, () => next(new Error("unavailable")));
   });
 
   io.on("connection", (socket) => {

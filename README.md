@@ -22,13 +22,18 @@ App di messaggistica istantanea, in stile WhatsApp:
 
 ### Chiamate
 
-Voce e video viaggiano direttamente tra i due dispositivi; il server fa solo squillare e
-mette in contatto. Funzionano nella versione web/installata (non in Expo Go). Su alcune reti
-mobili un collegamento diretto è impossibile: in quel caso serve un server **TURN** che faccia
-da ponte. Se ne crei uno gratuito (es. Metered.ca o Cloudflare Calls) e imposti `TURN_URLS`,
-`TURN_USERNAME` e `TURN_CREDENTIAL`, le chiamate funzionano su qualsiasi rete.
+Voce e video viaggiano direttamente tra i due dispositivi; il server fa solo squillare e mette in
+contatto. Sulle reti mobili (4G/5G) il collegamento diretto spesso è bloccato: serve un server
+**TURN** che faccia da ponte. Vibloo ne supporta tre tipi, basta impostare le variabili su Render:
 
-### Notifiche
+- **Metered.ca** (piano gratuito): `METERED_DOMAIN` (es. `vibloo.metered.live`) e `METERED_API_KEY`;
+- **Cloudflare Realtime TURN** (piano gratuito): `CLOUDFLARE_TURN_KEY_ID` e `CLOUDFLARE_TURN_API_TOKEN`;
+- un TURN qualsiasi: `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`.
+
+Se una chiamata non si collega entro 25 secondi, entrambi vedono il motivo e il server scrive nei
+log una riga "Chiamata non collegata" con i dettagli.
+
+## Notifiche
 
 Alla prima apertura Vibloo mostra "Attiva le notifiche". Funzionano su Android, sui computer e
 su iPhone/iPad (iOS 16.4 o successivo) **solo dopo** aver aggiunto Vibloo alla schermata Home.
@@ -112,7 +117,9 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | `JWT_SECRET` | generata        | se manca viene creata e salvata (nel database online, o accanto al file SQLite) |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
 | `INVITE_ONLY` | `true` | `false` per permettere a chiunque di iscriversi senza invito |
-| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | — | server TURN per le chiamate (facoltativo, `TURN_URLS` separati da virgola) |
+| `METERED_DOMAIN`, `METERED_API_KEY` | — | TURN di Metered.ca per le chiamate su 4G/5G |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | — | TURN di Cloudflare (alternativa) |
+| `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | — | un server TURN qualsiasi (`TURN_URLS` separati da virgola) |
 
 ## Test
 

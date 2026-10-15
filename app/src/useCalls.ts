@@ -31,6 +31,7 @@ const END_TEXT: Record<string, string> = {
   busy: "Occupato in un'altra chiamata",
   disconnected: "Connessione persa",
   failed: "Connessione non riuscita",
+  no_route: "Le due reti non riescono a collegarsi",
   answered_elsewhere: "Hai risposto su un altro dispositivo",
 };
 
@@ -89,11 +90,15 @@ export function useCalls(socket: Socket | null, api: Api) {
   const facing = useRef<"user" | "environment">("user");
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const ice = useRef<RTCIceServer[] | null>(null);
+  const hasTurn = useRef(false);
+  const connectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // STUN/TURN servers from our server, fetched once.
   const iceConfig = async () => {
     if (!ice.current) {
-      ice.current = (await api.callConfig().catch(() => null))?.iceServers ?? [{ urls: "stun:stun.l.google.com:19302" }];
+      const cfg = await api.callConfig().catch(() => null);
+      ice.current = cfg?.iceServers ?? [{ urls: "stun:stun.l.google.com:19302" }];
+      hasTurn.current = Boolean(cfg?.hasTurn);
     }
     return ice.current;
   };
@@ -106,6 +111,7 @@ export function useCalls(socket: Socket | null, api: Api) {
 
   const cleanup = useCallback(() => {
     tones.current.stop();
+    clearTimeout(connectTimer.current);
     pc.current?.close();
     pc.current = null;
     local.current?.getTracks().forEach((t) => t.stop());
@@ -146,20 +152,61 @@ export function useCalls(socket: Socket | null, api: Api) {
 
   const send = (data: unknown) => socket?.emit("call:signal", { callId: callRef.current?.id, data });
 
+  // Why the call did not connect: ICE states and which kinds of paths each side found.
+  async function reportFailure(peer: RTCPeerConnection, reason: string) {
+    try {
+      const kinds = { local: new Set<string>(), remote: new Set<string>() };
+      (await peer.getStats()).forEach((r: { type: string; candidateType?: string }) => {
+        if (r.type === "local-candidate" && r.candidateType) kinds.local.add(r.candidateType);
+        if (r.type === "remote-candidate" && r.candidateType) kinds.remote.add(r.candidateType);
+      });
+      socket?.emit("call:diag", {
+        reason, ice: peer.iceConnectionState, conn: peer.connectionState, hasTurn: hasTurn.current,
+        local: [...kinds.local], remote: [...kinds.remote], ua: navigator.userAgent,
+      });
+    } catch { /* diagnostics are best effort */ }
+  }
+
+  // The usual cause on 4G/5G: no direct path and no TURN relay configured.
+  function explainFailure() {
+    setError(hasTurn.current
+      ? "La chiamata non si è collegata. Controlla la connessione di entrambi e riprova."
+      : "La chiamata non si è collegata: le reti dei due telefoni (spesso 4G/5G) bloccano il collegamento diretto. "
+        + "Per farla funzionare ovunque va configurato un server TURN su Render. Su due Wi-Fi diversi di solito funziona.");
+  }
+
+  function giveUp(peer: RTCPeerConnection, why: string) {
+    if (!callRef.current || callRef.current.phase === "ended") return;
+    reportFailure(peer, why);
+    const reason = why === "timeout" ? "no_route" : "failed";
+    socket?.emit("call:hangup", { callId: callRef.current.id, reason });
+    explainFailure();
+    finish(reason);
+  }
+
   async function createPeer() {
     const peer = new RTCPeerConnection({ iceServers: await iceConfig() });
     pc.current = peer;
     local.current?.getTracks().forEach((t) => peer.addTrack(t, local.current!));
     peer.onicecandidate = (e) => { if (e.candidate) send({ type: "candidate", candidate: e.candidate.toJSON() }); };
     peer.ontrack = (e) => setRemoteStream(e.streams[0] ?? new MediaStream([e.track]));
-    peer.onconnectionstatechange = () => {
-      const state = peer.connectionState;
-      if (state === "connected" && callRef.current?.phase !== "active") update({ phase: "active", startedAt: Date.now() });
-      if (state === "failed") {
-        socket?.emit("call:hangup", { callId: callRef.current?.id });
-        finish("failed");
+    // Safari may report only iceConnectionState, so both are watched.
+    const onState = () => {
+      const conn = peer.connectionState;
+      const ice = peer.iceConnectionState;
+      if ((conn === "connected" || ice === "connected" || ice === "completed") && callRef.current?.phase !== "active") {
+        clearTimeout(connectTimer.current);
+        update({ phase: "active", startedAt: Date.now() });
       }
+      if (conn === "failed" || ice === "failed") giveUp(peer, "failed");
     };
+    peer.onconnectionstatechange = onState;
+    peer.oniceconnectionstatechange = onState;
+    // Without a connection after 25 s, stop instead of hanging on "Connessione…".
+    clearTimeout(connectTimer.current);
+    connectTimer.current = setTimeout(() => {
+      if (callRef.current && callRef.current.phase !== "active" && callRef.current.phase !== "ended") giveUp(peer, "timeout");
+    }, 25000);
     return peer;
   }
 
@@ -295,7 +342,9 @@ export function useCalls(socket: Socket | null, api: Api) {
     };
 
     const onEnded = ({ callId, reason }: { callId: string; reason: string }) => {
-      if (callRef.current?.id === callId) finish(reason);
+      if (callRef.current?.id !== callId) return;
+      if (reason === "no_route" || reason === "failed") explainFailure();
+      finish(reason);
     };
 
     socket.on("call:incoming", onIncoming);

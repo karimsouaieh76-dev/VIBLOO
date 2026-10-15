@@ -429,7 +429,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     res.send(file.data);
   });
 
-  app.get("/api/call-config", requireUser, (_req, res) => res.json({ iceServers: iceServers() }));
+  app.get("/api/call-config", requireUser, async (_req, res) => res.json(await iceServers()));
 
   app.get("/api/push/key", requireUser, (_req, res) => res.json({ publicKey: push.publicKey }));
   app.post("/api/push/subscribe", requireUser, async (req, res) => {

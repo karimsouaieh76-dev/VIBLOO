@@ -133,7 +133,7 @@ export function createApi(baseUrl: string, token?: string) {
     attachmentUrl: (id: number, download = false) =>
       `${root}/api/attachments/${id}?token=${encodeURIComponent(token ?? "")}${download ? "&download=1" : ""}`,
 
-    callConfig: () => request<{ iceServers: RTCIceServer[] }>("/api/call-config"),
+    callConfig: () => request<{ iceServers: RTCIceServer[]; hasTurn: boolean }>("/api/call-config"),
     async setAvatar(file: LocalFile) {
       const data = await (await fetch(file.uri)).blob();
       return request<{ avatarAt: number }>("/api/me/avatar", { method: "PUT", body: data, headers: { "content-type": file.mime } });

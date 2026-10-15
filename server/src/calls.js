@@ -114,9 +114,11 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
       reply({ ok: true });
     });
 
-    handle("call:hangup", async ({ callId }, reply) => {
+    // `reason` tells the other side the call could not connect (shown to both).
+    handle("call:hangup", async ({ callId, reason }, reply) => {
       const call = calls.get(callId);
-      if (call && (call.from.id === user.id || call.to.id === user.id)) await end(call, "hangup", user.id);
+      const why = reason === "failed" || reason === "no_route" ? reason : "hangup";
+      if (call && (call.from.id === user.id || call.to.id === user.id)) await end(call, why, user.id);
       reply({ ok: true });
     });
 
@@ -126,6 +128,11 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
       if (!call || !call.answeredAt) return;
       if (socket.id === call.callerSocket) toSocket(call.calleeSocket, "call:signal", { callId, data });
       else if (socket.id === call.calleeSocket) toSocket(call.callerSocket, "call:signal", { callId, data });
+    });
+
+    // Why a call did not connect, for the server logs (ICE states and candidate types).
+    socket.on("call:diag", (d) => {
+      try { console.log("Chiamata non collegata:", JSON.stringify(d).slice(0, 600)); } catch { /* ignore */ }
     });
 
     socket.on("disconnect", () => {
@@ -138,16 +145,56 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
   return { attach, active: () => calls.size };
 }
 
-// STUN finds each device's public address; TURN relays the media when a
-// direct path is impossible (some mobile networks). TURN is optional.
-export function iceServers() {
-  const servers = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
-  if (process.env.TURN_URLS) {
-    servers.push({
-      urls: process.env.TURN_URLS.split(",").map((s) => s.trim()).filter(Boolean),
-      username: process.env.TURN_USERNAME ?? "",
-      credential: process.env.TURN_CREDENTIAL ?? "",
-    });
+// STUN finds each device's public address; TURN relays voice and video when
+// a direct path is impossible (common on 4G/5G). TURN comes from, in order:
+// Cloudflare Realtime, Metered.ca, or fixed TURN_URLS/USERNAME/CREDENTIAL.
+const STUN = { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] };
+let cached = null; // { servers, until }
+
+async function fetchTurn() {
+  const env = process.env;
+  if (env.CLOUDFLARE_TURN_KEY_ID && env.CLOUDFLARE_TURN_API_TOKEN) {
+    const res = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.CLOUDFLARE_TURN_API_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ ttl: 86400 }),
+      });
+    if (!res.ok) throw new Error(`Cloudflare TURN ${res.status}`);
+    const body = await res.json();
+    const list = Array.isArray(body.iceServers) ? body.iceServers : [body.iceServers];
+    return { servers: list, ttl: 12 * 3600 * 1000 };
   }
-  return servers;
+  if (env.METERED_DOMAIN && env.METERED_API_KEY) {
+    const res = await fetch(`https://${env.METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${encodeURIComponent(env.METERED_API_KEY)}`);
+    if (!res.ok) throw new Error(`Metered TURN ${res.status}`);
+    return { servers: await res.json(), ttl: 3600 * 1000 };
+  }
+  if (env.TURN_URLS) {
+    return {
+      servers: [{
+        urls: env.TURN_URLS.split(",").map((s) => s.trim()).filter(Boolean),
+        username: env.TURN_USERNAME ?? "",
+        credential: env.TURN_CREDENTIAL ?? "",
+      }],
+      ttl: Infinity,
+    };
+  }
+  return { servers: [], ttl: Infinity };
+}
+
+export async function iceServers() {
+  if (!cached || cached.until < Date.now()) {
+    try {
+      const { servers, ttl } = await fetchTurn();
+      cached = { servers, until: Date.now() + ttl };
+    } catch (err) {
+      console.error("TURN non disponibile:", err.message);
+      cached = { servers: [], until: Date.now() + 60 * 1000 };
+    }
+  }
+  const turn = cached.servers;
+  const hasTurn = turn.some((s) => [].concat(s.urls ?? s.url ?? []).some((u) => /^turns?:/.test(u)));
+  return { iceServers: [STUN, ...turn], hasTurn };
 }

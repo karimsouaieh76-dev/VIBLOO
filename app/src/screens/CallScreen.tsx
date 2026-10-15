@@ -7,15 +7,24 @@ import { formatDuration } from "../format";
 import type { Calls } from "../useCalls";
 
 // A <video>/<audio> element fed by a MediaStream (web only).
-function MediaView({ stream, kind, muted, mirror, style }: {
+// Safari may refuse to start playback on its own: `onBlocked` lets the screen ask for a tap.
+const blockedPlayers = new Set<HTMLMediaElement>();
+
+function MediaView({ stream, kind, muted, mirror, style, onBlocked }: {
   stream: MediaStream | null; kind: "video" | "audio"; muted?: boolean; mirror?: boolean; style?: object;
+  onBlocked?: () => void;
 }) {
   const ref = useRef<HTMLMediaElement | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (el.srcObject !== stream) el.srcObject = stream;
-    if (stream) el.play().catch(() => {});
+    if (stream) {
+      el.play().catch(() => {
+        blockedPlayers.add(el);
+        onBlocked?.();
+      });
+    }
   }, [stream]);
   return createElement(kind, {
     ref,
@@ -54,6 +63,12 @@ export function CallScreen({ calls }: { calls: Calls }) {
   const insets = useSafeAreaInsets();
   const { call, localStream, remoteStream } = calls;
   const [now, setNow] = useState(Date.now());
+  const [needsTap, setNeedsTap] = useState(false);
+  const resume = () => {
+    blockedPlayers.forEach((el) => el.play().catch(() => {}));
+    blockedPlayers.clear();
+    setNeedsTap(false);
+  };
 
   useEffect(() => {
     if (call?.phase !== "active") return;
@@ -75,9 +90,14 @@ export function CallScreen({ calls }: { calls: Calls }) {
   return (
     <View style={styles.root} accessibilityViewIsModal>
       {remoteHasVideo ? (
-        <View style={StyleSheet.absoluteFill}><MediaView stream={remoteStream} kind="video" /></View>
+        <View style={StyleSheet.absoluteFill}><MediaView stream={remoteStream} kind="video" onBlocked={() => setNeedsTap(true)} /></View>
       ) : (
-        <MediaView stream={remoteStream} kind="audio" />
+        <MediaView stream={remoteStream} kind="audio" onBlocked={() => setNeedsTap(true)} />
+      )}
+      {needsTap && call.phase !== "ended" && (
+        <Pressable onPress={resume} style={styles.tapOverlay} accessibilityRole="button">
+          <Text style={styles.tapText}>Tocca per vedere e sentire</Text>
+        </Pressable>
       )}
 
       <View style={[styles.top, { paddingTop: insets.top + 32 }, remoteHasVideo && styles.topOverVideo]}>
@@ -121,6 +141,11 @@ const styles = StyleSheet.create({
   topOverVideo: { backgroundColor: "rgba(0,0,0,0.25)", paddingBottom: 12 },
   name: { color: "#f2fbf8", fontSize: 28, fontWeight: "700", marginTop: 12 },
   status: { color: "rgba(242,251,248,0.75)", fontSize: 16, fontVariant: ["tabular-nums"] },
+  tapOverlay: {
+    position: "absolute", left: 24, right: 24, top: "45%", zIndex: 5, padding: 18, borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.92)", alignItems: "center",
+  },
+  tapText: { color: "#0b1514", fontSize: 17, fontWeight: "700" },
   pip: {
     position: "absolute", right: 16, width: 110, height: 160, borderRadius: 14, overflow: "hidden",
     borderWidth: 2, borderColor: "rgba(255,255,255,0.35)", backgroundColor: "#000",

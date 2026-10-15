@@ -25,7 +25,11 @@ export type Message = {
   editedAt: number | null;
   deletedAt: number | null;
   attachment: Attachment | null;
+  replyTo?: ReplyRef | null; // the message this one answers
+  reactions?: Reaction[];
 };
+export type ReplyRef = { id: number; userId: number; username: string; kind: MessageKind; text: string; deleted: boolean };
+export type Reaction = { userId: number; username: string; emoji: string };
 export type Invite = {
   code: string;
   createdAt: number;

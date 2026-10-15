@@ -283,3 +283,33 @@ test("foto profilo", async () => {
   assert.equal((await fetch(`${base}/api/users/${p.user.id}/avatar?token=${q.token}`)).status, 404);
   assert.equal((await call("GET", "/api/me", p.token)).user.avatarAt, null);
 });
+
+test("risposte e reazioni", async () => {
+  const a = await register("rita");
+  const b = await register("tea");
+  const { conversation } = await call("POST", "/api/conversations", a.token, { userId: b.user.id });
+  await call("POST", `/api/conversations/${conversation.id}/accept`, b.token, {});
+  const sa = await socketFor(a.token);
+  const sb = await socketFor(b.token);
+  const first = (await sa.emitWithAck("message:send", { conversationId: conversation.id, text: "Pizza stasera?" })).message;
+  assert.deepEqual(first.reactions, []);
+  const answer = (await sb.emitWithAck("message:send", { conversationId: conversation.id, text: "Sì!", replyToId: first.id })).message;
+  assert.equal(answer.replyTo.id, first.id);
+  assert.equal(answer.replyTo.username, "rita");
+  assert.equal(answer.replyTo.text, "Pizza stasera?");
+
+  const update = next(sa, "message:update");
+  const reacted = (await sb.emitWithAck("message:react", { messageId: first.id, emoji: "❤️" })).message;
+  assert.deepEqual(reacted.reactions.map((r) => [r.username, r.emoji]), [["tea", "❤️"]]);
+  assert.equal((await update).reactions.length, 1);
+  // Another emoji replaces it, the same one again removes it.
+  assert.equal((await sb.emitWithAck("message:react", { messageId: first.id, emoji: "😂" })).message.reactions[0].emoji, "😂");
+  assert.equal((await sb.emitWithAck("message:react", { messageId: first.id, emoji: "😂" })).message.reactions.length, 0);
+
+  const list = (await call("GET", `/api/conversations/${conversation.id}/messages`, a.token)).messages;
+  assert.equal(list.at(-1).replyTo.id, first.id);
+  // Someone outside the chat cannot react.
+  const c = await register("estraneo");
+  const sc = await socketFor(c.token);
+  assert.ok((await sc.emitWithAck("message:react", { messageId: first.id, emoji: "👍" })).error);
+});

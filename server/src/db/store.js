@@ -4,17 +4,31 @@ const MESSAGE_SELECT = `
   SELECT m.id, m.conversation_id AS "conversationId", m.user_id AS "userId", u.username,
          m.kind, m.text, m.created_at AS "createdAt", m.edited_at AS "editedAt", m.deleted_at AS "deletedAt",
          a.id AS "attId", a.mime AS "attMime", a.name AS "attName", a.size AS "attSize",
-         a.width AS "attWidth", a.height AS "attHeight", a.duration AS "attDuration"
+         a.width AS "attWidth", a.height AS "attHeight", a.duration AS "attDuration",
+         r.id AS "repId", ru.username AS "repUsername", r.user_id AS "repUserId", r.kind AS "repKind", r.text AS "repText",
+         r.deleted_at AS "repDeletedAt"
   FROM chat_messages m
   JOIN users u ON u.id = m.user_id
-  LEFT JOIN attachments a ON a.id = m.attachment_id`;
+  LEFT JOIN attachments a ON a.id = m.attachment_id
+  LEFT JOIN chat_messages r ON r.id = m.reply_to_id
+  LEFT JOIN users ru ON ru.id = r.user_id`;
 
 // Flat SQL row -> message object with a nested attachment.
 function toMessage(r) {
   if (!r) return r;
-  const { attId, attMime, attName, attSize, attWidth, attHeight, attDuration, ...m } = r;
+  const {
+    attId, attMime, attName, attSize, attWidth, attHeight, attDuration,
+    repId, repUsername, repUserId, repKind, repText, repDeletedAt, ...m
+  } = r;
   return {
     ...m,
+    // The message this one answers, shortened for the quote above the text.
+    replyTo: repId
+      ? {
+          id: repId, userId: repUserId, username: repUsername, kind: repKind,
+          text: repDeletedAt ? "" : String(repText ?? "").slice(0, 200), deleted: Boolean(repDeletedAt),
+        }
+      : null,
     attachment: attId
       ? { id: attId, mime: attMime, name: attName, size: attSize, width: attWidth, height: attHeight, duration: attDuration }
       : null,
@@ -117,6 +131,14 @@ export async function createStore(driver) {
     );
     CREATE INDEX IF NOT EXISTS invites_by_creator ON invites (created_by);
 
+    -- One emoji per person per message.
+    CREATE TABLE IF NOT EXISTS reactions (
+      message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji      TEXT NOT NULL,
+      PRIMARY KEY (message_id, user_id)
+    );
+
     -- One-time codes to set a new password, made by the admin or the inviter.
     CREATE TABLE IF NOT EXISTS password_resets (
       code       TEXT PRIMARY KEY,
@@ -141,10 +163,27 @@ export async function createStore(driver) {
     "users ADD COLUMN avatar_at BIGINT",
     // accepted | pending (a message request not answered yet) | declined
     "conversation_members ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'",
+    "chat_messages ADD COLUMN reply_to_id INTEGER",
     // Bumped when the password changes: older sessions stop working.
     "users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
   ]) {
     try { await exec(`ALTER TABLE ${column}`); } catch { /* already there */ }
+  }
+
+  // Adds `reactions: [{ userId, username, emoji }]` to each message.
+  async function withReactions(list) {
+    if (!list.length) return list;
+    const ids = list.map((m) => m.id);
+    const rows = await query(
+      `SELECT r.message_id AS "messageId", r.user_id AS "userId", u.username, r.emoji
+       FROM reactions r JOIN users u ON u.id = r.user_id
+       WHERE r.message_id IN (${ids.map(() => "?").join(",")})`, ids);
+    const by = new Map();
+    for (const r of rows) {
+      if (!by.has(r.messageId)) by.set(r.messageId, []);
+      by.get(r.messageId).push({ userId: r.userId, username: r.username, emoji: r.emoji });
+    }
+    return list.map((m) => ({ ...m, reactions: by.get(m.id) ?? [] }));
   }
 
   const store = {
@@ -291,22 +330,33 @@ export async function createStore(driver) {
       Boolean(await one("SELECT 1 AS x FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)", [a, b, b, a])),
 
     // ---------- messages ----------
-    async addMessage(conversationId, userId, text, attachment = null, kind = null) {
+    async addMessage(conversationId, userId, text, attachment = null, kind = null, replyToId = null) {
       const { id } = await one(
-        `INSERT INTO chat_messages (conversation_id, user_id, kind, text, attachment_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-        [conversationId, userId, kind ?? (attachment ? kindFor(attachment.mime) : "text"), text, attachment?.id ?? null, Date.now()]);
+        `INSERT INTO chat_messages (conversation_id, user_id, kind, text, attachment_id, created_at, reply_to_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        [conversationId, userId, kind ?? (attachment ? kindFor(attachment.mime) : "text"), text, attachment?.id ?? null, Date.now(),
+          replyToId]);
       // The sender has obviously read everything up to their own message.
       await store.markRead(conversationId, userId, id);
       return store.getMessage(id);
     },
-    getMessage: async (id) => toMessage(await one(`${MESSAGE_SELECT} WHERE m.id = ?`, [id])),
+    getMessage: async (id) => {
+      const m = toMessage(await one(`${MESSAGE_SELECT} WHERE m.id = ?`, [id]));
+      return m && (await withReactions([m]))[0];
+    },
 
     // Newest first from the DB, returned oldest first for display.
     async messages(conversationId, before = 2147483647, limit = 50) {
       const rows = await query(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`,
         [conversationId, before, limit]);
-      return rows.reverse().map(toMessage);
+      return withReactions(rows.reverse().map(toMessage));
+    },
+
+    // emoji null removes my reaction.
+    async react(messageId, userId, emoji) {
+      await query("DELETE FROM reactions WHERE message_id = ? AND user_id = ?", [messageId, userId]);
+      if (emoji) await query("INSERT INTO reactions (message_id, user_id, emoji) VALUES (?, ?, ?)", [messageId, userId, emoji]);
+      return store.getMessage(messageId);
     },
 
     async editMessage(id, text) {
@@ -318,6 +368,7 @@ export async function createStore(driver) {
     async deleteMessage(id) {
       const row = await one("SELECT attachment_id AS \"attachmentId\" FROM chat_messages WHERE id = ?", [id]);
       await query("UPDATE chat_messages SET text = '', attachment_id = NULL, deleted_at = ? WHERE id = ?", [Date.now(), id]);
+      await query("DELETE FROM reactions WHERE message_id = ?", [id]);
       if (row?.attachmentId) await query("DELETE FROM attachments WHERE id = ?", [row.attachmentId]);
       return store.getMessage(id);
     },

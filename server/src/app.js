@@ -599,7 +599,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
         }
       });
 
-    handle("message:send", async ({ conversationId, text, attachmentId }, reply) => {
+    handle("message:send", async ({ conversationId, text, attachmentId, replyToId }, reply) => {
       const id = toId(conversationId);
       const body = typeof text === "string" ? text.trim() : "";
       if (body.length > MAX_MESSAGE) return reply({ error: `Il messaggio supera i ${MAX_MESSAGE} caratteri.` });
@@ -618,7 +618,12 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
         }
       }
       if (!body && !attachment) return reply({ error: "Il messaggio è vuoto." });
-      const message = await db.addMessage(id, user.id, body, attachment);
+      let replyTo = null;
+      if (replyToId !== undefined && replyToId !== null) {
+        const target = await db.getMessage(toId(replyToId) ?? 0);
+        if (target && target.conversationId === id) replyTo = target.id;
+      }
+      const message = await db.addMessage(id, user.id, body, attachment, null, replyTo);
       reply({ message });
       const members = await db.memberIds(id);
       for (const m of members) io.to(userRoom(m)).emit("message:new", message);
@@ -662,6 +667,27 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
       const updated = await db.deleteMessage(message.id);
       reply({ message: updated });
       await toMembers(updated.conversationId, "message:update", updated);
+    });
+
+    // A reaction (one emoji per person; the same emoji again removes it).
+    handle("message:react", async ({ messageId, emoji }, reply) => {
+      const m = await db.getMessage(toId(messageId) ?? 0);
+      if (!m || !(await db.isMember(m.conversationId, user.id)) || m.deletedAt) return reply({ error: "Messaggio non trovato." });
+      if ((await db.memberStatus(m.conversationId, user.id)) !== "accepted") return reply({ error: "Accetta la richiesta per reagire." });
+      const partner = await db.directPartner(m.conversationId, user.id);
+      if (partner && (await db.eitherBlocked(user.id, partner))) return reply({ error: "Non puoi reagire in questa chat." });
+      const value = typeof emoji === "string" && emoji.length > 0 && emoji.length <= 16 ? emoji : null;
+      const mine = m.reactions.find((r) => r.userId === user.id);
+      const next = value && mine?.emoji !== value ? value : null;
+      const updated = await db.react(m.id, user.id, next);
+      reply({ message: updated });
+      await toMembers(updated.conversationId, "message:update", updated);
+      if (next && m.userId !== user.id && !isLooking(m.userId)) {
+        const what = m.text ? `«${m.text.slice(0, 60)}»` : "al tuo messaggio";
+        push.send([m.userId], {
+          title: user.username, body: `Ha reagito ${next} ${what}`, conversationId: m.conversationId, tag: `c${m.conversationId}`,
+        }).catch((err) => console.error(err));
+      }
     });
 
     calls.attach(socket, user, handle);

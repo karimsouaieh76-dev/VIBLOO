@@ -29,6 +29,17 @@ type Row =
   | { kind: "msg"; key: string; m: ChatMessage; first: boolean };
 
 const EDIT_WINDOW = 24 * 60 * 60 * 1000;
+const QUICK_REACTIONS = ["❤️", "😂", "😮", "😢", "🙏", "👍"];
+
+// One line describing a quoted message.
+function quoteText(r: { kind: string; text: string; deleted?: boolean }) {
+  if (r.deleted) return "Messaggio eliminato";
+  if (r.kind === "image") return r.text ? `📷 ${r.text}` : "📷 Foto";
+  if (r.kind === "audio") return "🎤 Messaggio vocale";
+  if (r.kind === "file") return "📎 File";
+  if (r.kind === "call") return "📞 Chiamata";
+  return r.text;
+}
 
 const recordingOptions = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -64,6 +75,8 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   const [error, setError] = useState("");
   const [noMore, setNoMore] = useState(false);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [reactionsFor, setReactionsFor] = useState<ChatMessage | null>(null);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatMessage | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -87,6 +100,7 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   const blocked = c.blockedByMe;
   const requestSent = !isRequest && partner?.status === "pending"; // I wrote, they haven't accepted
   const canCall = Boolean(onCall) && !c.isGroup && !isRequest && !blocked && !requestSent;
+  const canWrite = !isRequest && !blocked;
   const [chatMenu, setChatMenu] = useState(false);
   const [confirmBlock, setConfirmBlock] = useState(false);
 
@@ -149,7 +163,8 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
     if (!body) return;
     setText("");
     setTypingState(false);
-    messenger.send(c.id, { text: body });
+    messenger.send(c.id, { text: body, replyTo });
+    setReplyTo(null);
   }
 
   // A photo goes out with whatever is typed as its caption.
@@ -160,7 +175,8 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       if (!file) return;
       const caption = file.mime.startsWith("image/") ? text.trim() : "";
       if (caption) setText("");
-      messenger.send(c.id, { text: caption, file });
+      messenger.send(c.id, { text: caption, file, replyTo });
+      setReplyTo(null);
     } catch (e) {
       setError((e as Error).message || "Non riesco ad aprire il file.");
     }
@@ -191,7 +207,8 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       if (duration < 700) return setError("Il vocale era troppo corto: registra almeno un secondo.");
       const mime = Platform.OS === "web" ? recordingOptions.web.mimeType.split(";")[0] : "audio/mp4";
       const ext = mime === "audio/webm" ? "webm" : "m4a";
-      messenger.send(c.id, { text: "", file: { uri, mime, name: `vocale-${Date.now()}.${ext}`, duration } });
+      messenger.send(c.id, { text: "", file: { uri, mime, name: `vocale-${Date.now()}.${ext}`, duration }, replyTo });
+      setReplyTo(null);
     } catch {
       setError("La registrazione non è riuscita. Riprova.");
     }
@@ -209,11 +226,21 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   function menuOptions(m: ChatMessage): SheetOption[] {
     const opts: SheetOption[] = [];
     const mine = m.userId === me.id;
+    if (canWrite) {
+      opts.push({
+        label: "Rispondi", onPress: () => {
+          setEditing(null);
+          setReplyTo(m);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        },
+      });
+    }
     if (m.text) opts.push({ label: "Copia testo", onPress: () => { Clipboard.setStringAsync(m.text).catch(() => {}); } });
     if (m.attachment && m.kind !== "audio") opts.push({ label: "Scarica", onPress: () => Linking.openURL(fileUrl(m, true)) });
     if (mine && (m.kind === "text" || m.text) && Date.now() - m.createdAt < EDIT_WINDOW) {
       opts.push({
         label: "Modifica", onPress: () => {
+          setReplyTo(null);
           setEditing(m);
           setText(m.text);
           setTimeout(() => inputRef.current?.focus(), 50);
@@ -222,6 +249,11 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
     }
     if (mine) opts.push({ label: "Elimina per tutti", danger: true, onPress: () => setConfirmDelete(m) });
     return opts;
+  }
+
+  async function react(m: ChatMessage, emoji: string) {
+    const err = await messenger.react(m.id, emoji);
+    if (err) setError(err);
   }
 
   const statusOf = (m: ChatMessage): Status => m.local ?? messageStatus(c, me, m);
@@ -295,6 +327,7 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
                   onOpenPhoto={() => setViewer({ uri: fileUrl(item.m), download: item.m.local ? undefined : fileUrl(item.m, true) })}
                   onOpenFile={() => Linking.openURL(fileUrl(item.m, true))}
                   onMenu={() => { if (!item.m.local && !item.m.deletedAt) setMenuFor(item.m); }}
+                  onReactions={() => setReactionsFor(item.m)}
                   onRetry={() => messenger.send(c.id, { text: item.m.text, file: item.m.localFile }, item.m.id)}
                   onDiscard={() => messenger.discard(c.id, item.m.id)}
                 />
@@ -338,6 +371,17 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
         </View>
       ) : (
       <>
+      {replyTo && !editing && (
+        <View style={s.editBar}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={s.editLabel}>Rispondi a {replyTo.userId === me.id ? "te stesso" : replyTo.username}</Text>
+            <Text style={s.editOld} numberOfLines={1}>{quoteText(replyTo)}</Text>
+          </View>
+          <Pressable onPress={() => setReplyTo(null)} hitSlop={10} accessibilityLabel="Annulla risposta">
+            <Text style={s.editClose}>✕</Text>
+          </Pressable>
+        </View>
+      )}
       {editing && (
         <View style={s.editBar}>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -430,6 +474,31 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       <ActionSheet
         visible={menuFor != null} onClose={() => setMenuFor(null)}
         options={menuFor ? menuOptions(menuFor) : []}
+        header={menuFor && canWrite ? (
+          <View style={s.reactPicker}>
+            {QUICK_REACTIONS.map((e) => {
+              const chosen = menuFor.reactions?.some((r) => r.userId === me.id && r.emoji === e);
+              return (
+                <Pressable
+                  key={e} accessibilityRole="button" accessibilityLabel={`Reagisci con ${e}`}
+                  onPress={() => { const m = menuFor; setMenuFor(null); react(m, e); }}
+                  style={({ pressed }) => [s.reactChoice, chosen && { backgroundColor: t.accentSoft }, pressed && { transform: [{ scale: 1.2 }] }]}
+                >
+                  <Text style={{ fontSize: 28 }}>{e}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+      />
+      <ActionSheet
+        visible={reactionsFor != null} onClose={() => setReactionsFor(null)}
+        title={(reactionsFor?.reactions ?? []).map((r) => `${r.emoji}  ${r.userId === me.id ? "Tu" : r.username}`).join("\n")}
+        options={(() => {
+          const m = reactionsFor;
+          const mine = m?.reactions?.find((r) => r.userId === me.id);
+          return m && mine && canWrite ? [{ label: `Togli la tua reazione ${mine.emoji}`, onPress: () => react(m, mine.emoji) }] : [];
+        })()}
       />
       <ActionSheet
         visible={confirmDelete != null} onClose={() => setConfirmDelete(null)}
@@ -472,18 +541,27 @@ function CallBubble({ m, me, t, onPress }: { m: ChatMessage; me: User; t: Theme;
   );
 }
 
-function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenFile, onMenu, onRetry, onDiscard }: {
+function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenFile, onMenu, onRetry, onDiscard, onReactions }: {
   m: ChatMessage; first: boolean; mine: boolean; showName: boolean; status: Status; t: Theme; url: string;
   onOpenPhoto: () => void; onOpenFile: () => void; onMenu: () => void; onRetry: () => void; onDiscard: () => void;
+  onReactions: () => void;
 }) {
   const s = styles(t);
   const a = m.attachment;
   const deleted = Boolean(m.deletedAt);
   const photo = !deleted && a != null && m.kind === "image";
   const voice = !deleted && a != null && m.kind === "audio";
+  // Reactions grouped by emoji, most used first: "❤️😂 3".
+  const reactions = deleted ? [] : m.reactions ?? [];
+  const counts = new Map<string, number>();
+  for (const r of reactions) counts.set(r.emoji, (counts.get(r.emoji) ?? 0) + 1);
+  const emojis = [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([e]) => e).slice(0, 3);
 
   return (
-    <View style={[s.msgRow, first && { marginTop: 8 }, mine ? { justifyContent: "flex-end" } : null, m.local === "failed" && { marginBottom: 20 }]}>
+    <View style={[
+      s.msgRow, first && { marginTop: 8 }, mine ? { justifyContent: "flex-end" } : null, m.local === "failed" && { marginBottom: 20 },
+      reactions.length > 0 && { marginBottom: 14 },
+    ]}>
       {m.local === "pending" && m.localFile && (
         <ActivityIndicator size="small" color={t.accent} style={{ alignSelf: "center", marginRight: 6 }} />
       )}
@@ -499,6 +577,12 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
           <Text style={[s.author, { color: avatarColor(m.userId) }, photo && { paddingHorizontal: 6 }]}>{m.username}</Text>
         )}
 
+        {m.replyTo && !deleted && (
+          <View style={[s.quote, mine && s.quoteMine, photo && { marginHorizontal: 6, marginTop: 4 }]}>
+            <Text style={[s.quoteName, { color: avatarColor(m.replyTo.userId) }]} numberOfLines={1}>{m.replyTo.username}</Text>
+            <Text style={s.quoteText} numberOfLines={2}>{quoteText(m.replyTo)}</Text>
+          </View>
+        )}
         {deleted ? (
           <View style={s.content}>
             <Text style={s.deleted}>🚫 {mine ? "Hai eliminato questo messaggio" : "Questo messaggio è stato eliminato"}</Text>
@@ -514,6 +598,14 @@ function Bubble({ m, first, mine, showName, status, t, url, onOpenPhoto, onOpenF
               <Meta m={m} mine={mine} status={status} t={t} onAccent={voice && mine} />
             </View>
           </>
+        )}
+        {reactions.length > 0 && (
+          <Pressable
+            onPress={onReactions} style={[s.reactions, mine ? { right: 8 } : { left: 8 }]}
+            accessibilityRole="button" accessibilityLabel={`Reazioni: ${reactions.map((r) => r.emoji).join(" ")}`}
+          >
+            <Text style={s.reactionsText}>{emojis.join("")}{reactions.length > 1 ? ` ${reactions.length}` : ""}</Text>
+          </Pressable>
         )}
       </Pressable>
       {m.local === "failed" && (
@@ -628,6 +720,20 @@ const styles = (t: Theme) => StyleSheet.create({
   editLabel: { color: t.accent, fontWeight: "700", fontSize: 13 },
   editOld: { color: t.muted, fontSize: 13.5 },
   editClose: { color: t.muted, fontSize: 18, fontWeight: "700" },
+  quote: {
+    borderLeftWidth: 3, borderLeftColor: t.accent, backgroundColor: "rgba(127,127,127,0.12)", borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4, marginBottom: 4,
+  },
+  quoteMine: { borderLeftColor: t.mineFg },
+  quoteName: { fontSize: 12.5, fontWeight: "700" },
+  quoteText: { fontSize: 13.5, color: t.muted, ...breakLongWords },
+  reactions: {
+    position: "absolute", bottom: -14, backgroundColor: t.bg, borderRadius: 12, paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: t.line,
+  },
+  reactionsText: { fontSize: 13, color: t.fg },
+  reactPicker: { flexDirection: "row", justifyContent: "space-around", paddingHorizontal: 12, paddingVertical: 8 },
+  reactChoice: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   composer: {
     flexDirection: "row", alignItems: "flex-end", gap: 2, paddingHorizontal: 6, paddingTop: 8,
     backgroundColor: t.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line,

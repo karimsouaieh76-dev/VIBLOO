@@ -6,7 +6,7 @@ import type { Api, Conversation, LocalFile, Message, MessageKind, User } from ".
 // Messages not yet saved by the server carry their state and, for media, the
 // local file (shown as a preview and kept for "Riprova").
 export type ChatMessage = Message & { local?: "pending" | "failed"; localFile?: LocalFile };
-export type Outgoing = { text: string; file?: LocalFile };
+export type Outgoing = { text: string; file?: LocalFile; replyTo?: Message | null };
 
 const kindOf = (mime: string): MessageKind =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : "file";
@@ -243,6 +243,11 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     const draft: ChatMessage = {
       id: tempId, conversationId, userId: me.id, username: me.username, text: out.text, createdAt: Date.now(),
       kind: file ? kindOf(file.mime) : "text", editedAt: null, deletedAt: null, local: "pending", localFile: file,
+      replyTo: out.replyTo ? {
+        id: out.replyTo.id, userId: out.replyTo.userId, username: out.replyTo.username, kind: out.replyTo.kind,
+        text: out.replyTo.text, deleted: false,
+      } : null,
+      reactions: [],
       attachment: file ? {
         id: 0, mime: file.mime, name: file.name, size: 0,
         width: file.width ?? null, height: file.height ?? null, duration: file.duration ?? null,
@@ -255,7 +260,9 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
     if (!socket?.connected) return fail();
     try {
       const attachmentId = file ? (await api.upload(conversationId, file)).attachment.id : undefined;
-      const res = await socket.timeout(15000).emitWithAck("message:send", { conversationId, text: out.text, attachmentId });
+      const res = await socket.timeout(15000).emitWithAck("message:send", {
+        conversationId, text: out.text, attachmentId, replyToId: out.replyTo?.id,
+      });
       if (res.error) return fail();
       const saved: Message = res.message;
       replaceMessage(conversationId, tempId, saved);
@@ -268,7 +275,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   const discard = useCallback((conversationId: number, tempId: number) => replaceMessage(conversationId, tempId, null), []);
 
   // Edit / delete for everyone. Resolves to an error message, or null.
-  const change = useCallback(async (event: "message:edit" | "message:delete", payload: object) => {
+  const change = useCallback(async (event: "message:edit" | "message:delete" | "message:react", payload: object) => {
     const socket = socketRef.current;
     if (!socket?.connected) return "Sei offline: riprova quando torna la connessione.";
     try {
@@ -285,6 +292,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   }, []);
   const editMessage = useCallback((messageId: number, text: string) => change("message:edit", { messageId, text }), [change]);
   const deleteMessage = useCallback((messageId: number) => change("message:delete", { messageId }), [change]);
+  const react = useCallback((messageId: number, emoji: string) => change("message:react", { messageId, emoji }), [change]);
 
   const sendTyping = useCallback((conversationId: number, on: boolean) => emit("typing", { conversationId, typing: on }), []);
 
@@ -312,7 +320,7 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
   return {
     expired, socket, myAvatarAt, setMyAvatarAt, connected, loaded, conversations, messages, typing, totalUnread,
     acceptRequest, declineRequest, setBlocked,
-    openConversation, loadOlder, send, discard, editMessage, deleteMessage, sendTyping, addConversation,
+    openConversation, loadOlder, send, discard, editMessage, deleteMessage, react, sendTyping, addConversation,
   };
 }
 

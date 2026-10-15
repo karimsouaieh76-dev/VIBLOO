@@ -172,8 +172,8 @@ export function PhotoViewer({ uri, onClose, onDownload }: { uri: string | null; 
 export type SheetOption = { label: string; onPress: () => void; danger?: boolean };
 
 // Bottom sheet of actions (message menu, attach menu, confirmations).
-export function ActionSheet({ visible, title, options, onClose }: {
-  visible: boolean; title?: string; options: SheetOption[]; onClose: () => void;
+export function ActionSheet({ visible, title, options, onClose, header }: {
+  visible: boolean; title?: string; options: SheetOption[]; onClose: () => void; header?: React.ReactNode;
 }) {
   const t = useTheme();
   return (
@@ -183,6 +183,7 @@ export function ActionSheet({ visible, title, options, onClose }: {
           backgroundColor: t.bg, borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 8, paddingBottom: 28,
           width: "100%", maxWidth: 520, alignSelf: "center",
         }}>
+          {header}
           {title ? <Text style={{ color: t.muted, fontSize: 13, textAlign: "center", paddingVertical: 10, paddingHorizontal: 20 }}>{title}</Text> : null}
           {options.map((o) => (
             <Pressable

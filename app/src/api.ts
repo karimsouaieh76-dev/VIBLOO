@@ -26,6 +26,14 @@ export type Message = {
   deletedAt: number | null;
   attachment: Attachment | null;
 };
+export type Invite = {
+  code: string;
+  createdAt: number;
+  expiresAt: number;
+  status: "open" | "used" | "expired";
+  usedBy: string | null;
+};
+
 // A file picked or recorded on this device, before upload.
 export type LocalFile = {
   uri: string;
@@ -85,8 +93,13 @@ export function createApi(baseUrl: string, token?: string) {
   const post = <T>(path: string, data: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(data) });
 
   return {
-    register: (username: string, password: string) =>
-      post<{ token: string; user: User }>("/api/register", { username, password }),
+    register: (username: string, password: string, invite?: string) =>
+      post<{ token: string; user: User }>("/api/register", { username, password, invite }),
+    checkInvite: (code: string) =>
+      request<{ valid: boolean; inviter: string | null }>(`/api/invites/${encodeURIComponent(code)}`),
+    invites: () => request<{ invites: Invite[]; inviteOnly: boolean }>("/api/invites"),
+    createInvite: () => post<{ invite: Invite }>("/api/invites", {}),
+    deleteInvite: (code: string) => request<{ ok: true }>(`/api/invites/${code}`, { method: "DELETE" }),
     login: (username: string, password: string) =>
       post<{ token: string; user: User }>("/api/login", { username, password }),
     me: () => request<{ user: User }>("/api/me"),

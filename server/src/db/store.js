@@ -106,6 +106,17 @@ export async function createStore(driver) {
       PRIMARY KEY (blocker_id, blocked_id)
     );
 
+    -- Single-use invitation codes: sign-up is by invitation only.
+    CREATE TABLE IF NOT EXISTS invites (
+      code       TEXT PRIMARY KEY,
+      created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      claimed_at BIGINT,
+      used_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS invites_by_creator ON invites (created_by);
+
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -351,6 +362,33 @@ export async function createStore(driver) {
       const r = await one("SELECT mime, data FROM avatars WHERE user_id = ?", [userId]);
       return r && { mime: r.mime, data: Buffer.from(r.data) };
     },
+
+    // ---------- invitations ----------
+    countUsers: async () => (await one("SELECT count(*) AS n FROM users"))?.n ?? 0,
+    createInvite: async (code, userId, ttlMs) => {
+      const now = Date.now();
+      await query("INSERT INTO invites (code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)", [code, userId, now, now + ttlMs]);
+      return { code, createdAt: now, expiresAt: now + ttlMs, usedBy: null };
+    },
+    getInvite: (code) =>
+      one(`SELECT i.code, i.created_by AS "createdBy", u.username AS "inviter", i.expires_at AS "expiresAt",
+                  i.claimed_at AS "claimedAt", i.used_by AS "usedBy"
+           FROM invites i JOIN users u ON u.id = i.created_by WHERE i.code = ?`, [code]),
+    listInvites: (userId) =>
+      query(`SELECT i.code, i.created_at AS "createdAt", i.expires_at AS "expiresAt", i.used_by AS "usedBy",
+                    u.username AS "usedByName"
+             FROM invites i LEFT JOIN users u ON u.id = i.used_by
+             WHERE i.created_by = ? ORDER BY i.created_at DESC LIMIT 50`, [userId]),
+    countOpenInvites: async (userId) =>
+      (await one("SELECT count(*) AS n FROM invites WHERE created_by = ? AND claimed_at IS NULL AND expires_at > ?", [userId, Date.now()]))?.n ?? 0,
+    // Takes the code for one sign-up; only one person can win a race for it.
+    claimInvite: async (code) =>
+      (await one(`UPDATE invites SET claimed_at = ? WHERE code = ? AND claimed_at IS NULL AND expires_at > ?
+                  RETURNING created_by AS "createdBy"`, [Date.now(), code, Date.now()]))?.createdBy ?? null,
+    releaseInvite: (code) => query("UPDATE invites SET claimed_at = NULL WHERE code = ? AND used_by IS NULL", [code]),
+    completeInvite: (code, userId) => query("UPDATE invites SET used_by = ? WHERE code = ?", [userId, code]),
+    deleteInvite: async (code, userId) =>
+      (await query("DELETE FROM invites WHERE code = ? AND created_by = ? AND claimed_at IS NULL RETURNING code", [code, userId])).length > 0,
 
     // ---------- settings ----------
     getSetting: async (key) => (await one("SELECT value FROM settings WHERE key = ?", [key]))?.value ?? null,

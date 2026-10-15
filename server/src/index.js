@@ -30,6 +30,7 @@ let httpServer;
 try {
   ({ httpServer } = await createServer({
     dbFile: DB_FILE,
+    inviteOnly: process.env.INVITE_ONLY !== "false",
     databaseUrl: process.env.DATABASE_URL,
     secret: loadSecret(),
   }));

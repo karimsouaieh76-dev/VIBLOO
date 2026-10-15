@@ -8,7 +8,7 @@ const { createServer } = await import("../src/app.js");
 let server, base;
 const sockets = [];
 before(async () => {
-  server = await createServer({ dbFile: ":memory:", secret: "test-secret" });
+  server = await createServer({ dbFile: ":memory:", secret: "test-secret", inviteOnly: false });
   await new Promise((r) => server.httpServer.listen(0, r));
   base = `http://127.0.0.1:${server.httpServer.address().port}`;
 });

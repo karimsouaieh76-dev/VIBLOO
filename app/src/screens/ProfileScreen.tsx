@@ -5,6 +5,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { Api, User } from "../api";
 import { Avatar } from "../components";
 import { pickAvatar } from "../media";
+import * as Clipboard from "expo-clipboard";
+import { Share } from "react-native";
+import type { Invite } from "../api";
 import { Theme, useTheme } from "../theme";
 
 type Props = {
@@ -14,9 +17,10 @@ type Props = {
   onAvatarChanged: (avatarAt: number | null) => void;
   onBack: () => void;
   onLogout: () => void;
+  inviteBase: string; // address invitation links point to
 };
 
-export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLogout }: Props) {
+export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLogout, inviteBase }: Props) {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
@@ -106,6 +110,8 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
         {error ? <Text style={s.error}>{error}</Text> : null}
         <Text style={s.hint}>La foto la vedono tutte le persone con cui chatti, tranne chi hai bloccato.</Text>
 
+        <InviteSection api={api} base={inviteBase} t={t} />
+
         <Text style={s.section}>Persone bloccate</Text>
         <View style={s.actions}>
           {blocked == null ? (
@@ -147,9 +153,140 @@ const styles = (t: Theme) => StyleSheet.create({
   pressed: { backgroundColor: t.accentSoft },
   rowText: { fontSize: 16, color: t.fg, fontWeight: "500" },
   error: { color: t.danger, textAlign: "center" },
+  inviteBtn: {
+    flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center", backgroundColor: t.accent,
+    borderRadius: 12, paddingVertical: 12,
+  },
+  inviteBtnText: { color: t.accentFg, fontWeight: "700", fontSize: 15 },
+  freshBox: { backgroundColor: t.accentSoft, borderRadius: 12, padding: 12, gap: 6, alignItems: "center" },
+  freshCode: { fontSize: 24, fontWeight: "800", letterSpacing: 2, color: t.fg, fontVariant: ["tabular-nums"] },
+  freshLink: { fontSize: 12.5, color: t.muted, textAlign: "center" },
+  smallBtn: {
+    flexDirection: "row", gap: 6, alignItems: "center", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
+    backgroundColor: t.bg,
+  },
+  smallBtnText: { color: t.accent, fontWeight: "700", fontSize: 13.5 },
+  inviteRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingTop: 6 },
+  inviteCode: { fontWeight: "700", color: t.fg, fontVariant: ["tabular-nums"], letterSpacing: 1 },
+  inviteState: { flex: 1, color: t.muted, fontSize: 13 },
   section: {
     alignSelf: "center", maxWidth: 480, width: "100%", marginTop: 18, fontSize: 12, fontWeight: "600", color: t.muted,
     textTransform: "uppercase", letterSpacing: 0.8,
   },
   hint: { color: t.muted, fontSize: 13, textAlign: "center", marginTop: 4 },
 });
+
+const dateFmt = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long" });
+const prettyCode = (c: string) => `${c.slice(0, 4)}-${c.slice(4)}`;
+
+// "Invita amici": single-use links valid 7 days; whoever joins becomes a contact.
+function InviteSection({ api, base, t }: { api: Api; base: string; t: Theme }) {
+  const s = styles(t);
+  const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [inviteOnly, setInviteOnly] = useState(true);
+  const [fresh, setFresh] = useState<Invite | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const linkFor = (code: string) => `${base.replace(/\/+$/, "")}/?invito=${code}`;
+
+  const load = () => api.invites().then((r) => { setInvites(r.invites); setInviteOnly(r.inviteOnly); }).catch(() => setInvites([]));
+  useEffect(() => { load(); }, [api]);
+
+  async function create() {
+    setNote("");
+    setBusy(true);
+    try {
+      const { invite } = await api.createInvite();
+      setFresh(invite);
+      setInvites((list) => [invite, ...(list ?? [])]);
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy(code: string) {
+    try {
+      await Clipboard.setStringAsync(linkFor(code));
+      setNote("Link copiato: incollalo in un messaggio.");
+    } catch {
+      setNote(`Copia a mano: ${linkFor(code)}`);
+    }
+  }
+
+  async function share(code: string) {
+    const message = `Ti invito su Vibloo, la nostra chat! Iscriviti da qui (vale 7 giorni, una sola volta): ${linkFor(code)}`;
+    try {
+      await Share.share({ message, url: linkFor(code), title: "Invito a Vibloo" });
+    } catch {
+      copy(code);
+    }
+  }
+
+  async function cancel(code: string) {
+    try {
+      await api.deleteInvite(code);
+      setInvites((list) => (list ?? []).filter((i) => i.code !== code));
+      if (fresh?.code === code) setFresh(null);
+    } catch (e) {
+      setNote((e as Error).message);
+    }
+  }
+
+  return (
+    <>
+      <Text style={s.section}>Invita amici</Text>
+      <View style={[s.actions, { padding: 16, gap: 10 }]}>
+        <Text style={{ color: t.muted, fontSize: 13.5, lineHeight: 19 }}>
+          {inviteOnly
+            ? "Su Vibloo ci si iscrive solo su invito. Ogni link vale per una persona e scade dopo 7 giorni; chi si iscrive diventa subito un tuo contatto."
+            : "Manda un link: chi si iscrive da lì diventa subito un tuo contatto."}
+        </Text>
+        <Pressable style={s.inviteBtn} onPress={create} disabled={busy} accessibilityRole="button">
+          {busy ? <ActivityIndicator color={t.accentFg} /> : (
+            <>
+              <Ionicons name="person-add" size={18} color={t.accentFg} />
+              <Text style={s.inviteBtnText}>Crea link d'invito</Text>
+            </>
+          )}
+        </Pressable>
+        {fresh && (
+          <View style={s.freshBox}>
+            <Text style={s.freshCode} selectable>{prettyCode(fresh.code)}</Text>
+            <Text style={s.freshLink} selectable numberOfLines={2}>{linkFor(fresh.code)}</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable style={s.smallBtn} onPress={() => share(fresh.code)} accessibilityRole="button">
+                <Ionicons name="share-social-outline" size={16} color={t.accent} />
+                <Text style={s.smallBtnText}>Condividi</Text>
+              </Pressable>
+              <Pressable style={s.smallBtn} onPress={() => copy(fresh.code)} accessibilityRole="button">
+                <Ionicons name="copy-outline" size={16} color={t.accent} />
+                <Text style={s.smallBtnText}>Copia link</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+        {note ? <Text style={{ color: t.muted, fontSize: 13 }}>{note}</Text> : null}
+        {(invites ?? []).filter((i) => i.code !== fresh?.code).slice(0, 10).map((i) => (
+          <View key={i.code} style={s.inviteRow}>
+            <Text style={s.inviteCode}>{prettyCode(i.code)}</Text>
+            <Text style={[s.inviteState, i.status === "used" && { color: t.online }]} numberOfLines={1}>
+              {i.status === "used" ? `Usato da ${i.usedBy ?? "—"}` : i.status === "expired" ? "Scaduto" : `Libero · scade il ${dateFmt.format(i.expiresAt)}`}
+            </Text>
+            {i.status === "open" && (
+              <>
+                <Pressable onPress={() => share(i.code)} hitSlop={8} accessibilityLabel={`Condividi ${prettyCode(i.code)}`}>
+                  <Ionicons name="share-social-outline" size={18} color={t.accent} />
+                </Pressable>
+                <Pressable onPress={() => cancel(i.code)} hitSlop={8} accessibilityLabel={`Annulla ${prettyCode(i.code)}`}>
+                  <Ionicons name="close-circle-outline" size={19} color={t.muted} />
+                </Pressable>
+              </>
+            )}
+          </View>
+        ))}
+      </View>
+    </>
+  );
+}

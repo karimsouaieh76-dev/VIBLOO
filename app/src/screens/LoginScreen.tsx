@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
@@ -8,14 +8,29 @@ import { Logo } from "../Logo";
 
 type Props = {
   initialServerUrl: string;
+  initialInvite?: string | null; // from an invitation link
   onLoggedIn: (session: { serverUrl: string; token: string; user: User }) => void;
 };
 
-export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
+export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Props) {
   const t = useTheme();
   const s = styles(t);
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(initialInvite ? "register" : "login");
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
+  const [invite, setInvite] = useState(initialInvite ?? "");
+  const [inviter, setInviter] = useState<string | null>(null);
+
+  // Show who sent the invitation as soon as the code is complete.
+  useEffect(() => {
+    const code = invite.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    setInviter(null);
+    if (code.length !== 8) return;
+    let cancelled = false;
+    createApi(serverUrl.trim()).checkInvite(code)
+      .then((r) => { if (!cancelled) setInviter(r.valid ? r.inviter : ""); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [invite, serverUrl]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29,7 +44,7 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
       const api = createApi(serverUrl.trim());
       const res = mode === "login"
         ? await api.login(username.trim(), password)
-        : await api.register(username.trim(), password);
+        : await api.register(username.trim(), password, invite.trim() || undefined);
       onLoggedIn({ serverUrl: serverUrl.trim(), ...res });
     } catch (e) {
       setError((e as Error).message);
@@ -51,6 +66,23 @@ export function LoginScreen({ initialServerUrl, onLoggedIn }: Props) {
             </Pressable>
           ))}
         </View>
+
+        {mode === "register" && (
+          <>
+            <Text style={s.label}>Codice invito</Text>
+            <TextInput
+              style={[s.input, s.mono]} value={invite} onChangeText={setInvite}
+              autoCapitalize="characters" autoCorrect={false} placeholder="es. K7PM-3QXA" placeholderTextColor={t.muted}
+            />
+            {inviter ? (
+              <Text style={s.inviteOk}>✓ Ti ha invitato {inviter}: sarete subito in contatto.</Text>
+            ) : inviter === "" ? (
+              <Text style={s.error}>Questo invito non è valido, è già stato usato o è scaduto.</Text>
+            ) : (
+              <Text style={s.inviteHint}>Vibloo è su invito: chiedi il link a chi lo usa già.</Text>
+            )}
+          </>
+        )}
 
         <Text style={s.label}>Nome utente</Text>
         <TextInput
@@ -99,6 +131,8 @@ const styles = (t: Theme) => StyleSheet.create({
   label: { fontSize: 12, fontWeight: "600", color: t.muted, textTransform: "uppercase", letterSpacing: 0.8, marginTop: 8 },
   input: { backgroundColor: t.panel, borderWidth: 1, borderColor: t.line, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, color: t.fg },
   mono: { fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }), fontSize: 14 },
+  inviteOk: { color: t.online, fontSize: 13.5, fontWeight: "600" },
+  inviteHint: { color: t.muted, fontSize: 13 },
   error: { color: t.danger, marginTop: 8 },
   button: { backgroundColor: t.accent, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 20 },
   buttonText: { color: t.accentFg, fontWeight: "700", fontSize: 16 },

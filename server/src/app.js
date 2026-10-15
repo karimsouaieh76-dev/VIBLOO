@@ -12,6 +12,15 @@ import { createCalls, iceServers } from "./calls.js";
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,24}$/;
 const MAX_MESSAGE = 4000;
+const INVITE_TTL = 7 * 24 * 60 * 60 * 1000;
+const MAX_OPEN_INVITES = 20;
+// Easy to read aloud or copy: no 0/O or 1/I/L.
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const newInviteCode = () => Array.from(randomBytes(8), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
+const normalizeCode = (v) => {
+  const c = String(v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return c.length === 8 ? c : null;
+};
 const MAX_UPLOAD = 15 * 1024 * 1024;
 const EDIT_WINDOW = 24 * 60 * 60 * 1000;
 const MAX_GROUP = 256;
@@ -20,7 +29,8 @@ const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 const toId = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
 const userRoom = (id) => `u:${id}`;
 
-export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }) {
+// inviteOnly: new accounts need an invitation code (except the very first one).
+export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, inviteOnly = true }) {
   const db = await openDb({ dbFile, databaseUrl });
   // Without a configured secret, generate one once and keep it in the
   // database, so logins survive restarts on hosts without a persistent disk.
@@ -117,7 +127,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
   app.post("/api/register", async (req, res) => {
-    const { username, password } = req.body ?? {};
+    const { username, password, invite } = req.body ?? {};
     if (typeof username !== "string" || !USERNAME_RE.test(username)) {
       return res.status(400).json({ error: "Il nome utente deve avere 3-24 caratteri: lettere, numeri, punto o trattino basso." });
     }
@@ -127,8 +137,71 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret }
     if (await db.findUserByName(username)) {
       return res.status(409).json({ error: "Questo nome utente è già in uso." });
     }
-    const user = await db.createUser(username, await hashPassword(password));
+
+    // The very first account needs no invitation, or nobody could ever join.
+    const code = normalizeCode(invite);
+    let inviterId = null;
+    if (inviteOnly && (await db.countUsers()) > 0) {
+      if (!code) return res.status(403).json({ error: "Per iscriverti serve un invito: chiedi il link a chi usa già Vibloo." });
+      inviterId = await db.claimInvite(code);
+      if (!inviterId) return res.status(403).json({ error: "Questo invito non è valido, è già stato usato o è scaduto. Chiedine uno nuovo." });
+    }
+
+    let user;
+    try {
+      user = await db.createUser(username, await hashPassword(password));
+    } catch (err) {
+      if (code && inviterId) await db.releaseInvite(code);
+      if (await db.findUserByName(username)) return res.status(409).json({ error: "Questo nome utente è già in uso." });
+      throw err;
+    }
+
+    // Whoever invited you is a contact straight away: a private chat both have accepted.
+    if (inviterId) {
+      await db.completeInvite(code, user.id);
+      const { id: convId } = await db.findOrCreateDirect(inviterId, user.id);
+      await db.setMemberStatus(convId, user.id, "accepted");
+      await db.setMemberStatus(convId, inviterId, "accepted");
+      io.to(userRoom(inviterId)).emit("conversation:new", await summary(inviterId, convId));
+      io.to(userRoom(inviterId)).emit("invite:used", { code, username: user.username });
+    }
     res.status(201).json({ token: tokens.sign(user), user });
+  });
+
+  // ---------- invitations ----------
+  // Public: the sign-up screen shows who invited you before you choose a name.
+  app.get("/api/invites/:code", async (req, res) => {
+    const inv = await db.getInvite(normalizeCode(req.params.code) ?? "");
+    const valid = Boolean(inv && !inv.claimedAt && inv.expiresAt > Date.now());
+    res.json({ valid, inviter: valid ? inv.inviter : null });
+  });
+
+  app.get("/api/invites", requireUser, async (req, res) => {
+    const now = Date.now();
+    const invites = (await db.listInvites(req.user.id)).map((i) => ({
+      code: i.code, createdAt: i.createdAt, expiresAt: i.expiresAt,
+      status: i.usedBy ? "used" : i.expiresAt <= now ? "expired" : "open",
+      usedBy: i.usedByName ?? null,
+    }));
+    res.json({ invites, inviteOnly });
+  });
+
+  app.post("/api/invites", requireUser, async (req, res) => {
+    if ((await db.countOpenInvites(req.user.id)) >= MAX_OPEN_INVITES) {
+      return res.status(429).json({ error: `Hai già ${MAX_OPEN_INVITES} inviti non usati: annullane qualcuno o aspetta che vengano usati.` });
+    }
+    let invite;
+    for (let i = 0; i < 5 && !invite; i++) {
+      try { invite = await db.createInvite(newInviteCode(), req.user.id, INVITE_TTL); } catch { /* code taken: try another */ }
+    }
+    if (!invite) throw new Error("Impossibile creare un codice d'invito");
+    res.status(201).json({ invite: { ...invite, status: "open", usedBy: null } });
+  });
+
+  app.delete("/api/invites/:code", requireUser, async (req, res) => {
+    const ok = await db.deleteInvite(normalizeCode(req.params.code) ?? "", req.user.id);
+    if (!ok) return res.status(404).json({ error: "Invito non trovato o già usato." });
+    res.json({ ok: true });
   });
 
   app.post("/api/login", async (req, res) => {

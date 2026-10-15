@@ -6,7 +6,7 @@ import { createServer } from "../src/app.js";
 let server, base;
 const sockets = [];
 before(async () => {
-  server = await createServer({ dbFile: ":memory:", databaseUrl: process.env.TEST_DATABASE_URL, secret: "test-secret" });
+  server = await createServer({ dbFile: ":memory:", databaseUrl: process.env.TEST_DATABASE_URL, secret: "test-secret", inviteOnly: false });
   await new Promise((r) => server.httpServer.listen(0, r));
   base = `http://127.0.0.1:${server.httpServer.address().port}`;
 });

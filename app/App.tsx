@@ -67,11 +67,24 @@ export default function App() {
       ) : session ? (
         <SignedIn session={session} onLogout={logout} />
       ) : (
-        <LoginScreen initialServerUrl={serverUrl} onLoggedIn={login} />
+        <LoginScreen initialServerUrl={serverUrl} initialInvite={inviteFromUrl} onLoggedIn={login} />
       )}
     </SafeAreaProvider>
   );
 }
+
+// An invitation link: https://…/?invito=K7PM3QXA
+const inviteFromUrl: string | null = (() => {
+  if (Platform.OS !== "web" || typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("invito");
+  if (code) {
+    params.delete("invito");
+    const rest = params.toString();
+    window.history.replaceState(null, "", rest ? `/?${rest}` : "/");
+  }
+  return code;
+})();
 
 function initialChatFromUrl(): number | null {
   if (Platform.OS !== "web") return null;
@@ -122,7 +135,7 @@ function SignedIn({ session, onLogout }: { session: Session; onLogout: () => voi
   } else if (screen.name === "profile") {
     content = (
       <ProfileScreen
-        me={session.user} api={api} avatarAt={messenger.myAvatarAt}
+        me={session.user} api={api} avatarAt={messenger.myAvatarAt} inviteBase={session.serverUrl}
         onAvatarChanged={messenger.setMyAvatarAt} onBack={home} onLogout={onLogout}
       />
     );

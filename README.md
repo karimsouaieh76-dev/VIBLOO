@@ -14,6 +14,9 @@ App di messaggistica istantanea, in stile WhatsApp:
   la prima volta finisce in **Richieste di messaggio** (Accetta / Elimina / Blocca) e finché non
   accetti non può chiamarti né vedere se sei online o se hai letto; puoi **bloccare** chiunque
   (tre puntini in alto nella chat) e sbloccarlo dal Profilo;
+- **registrazione su invito**: ci si iscrive solo con un link d'invito (Profilo → Invita amici),
+  valido una volta e per 7 giorni; chi si iscrive diventa subito contatto di chi l'ha invitato.
+  Il primo account di un database vuoto non ha bisogno di invito;
 - **chiamate vocali e videochiamate** 1 a 1 (WebRTC): suoneria, muto, videocamera on/off, cambio
   fotocamera, notifica di chiamata in arrivo e storico delle chiamate nella chat.
 
@@ -108,6 +111,7 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 | `DB_FILE`    | `vibloo.db`    | file SQLite                                |
 | `JWT_SECRET` | generata        | se manca viene creata e salvata (nel database online, o accanto al file SQLite) |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generate | chiavi delle notifiche; se mancano vengono create e salvate nel database |
+| `INVITE_ONLY` | `true` | `false` per permettere a chiunque di iscriversi senza invito |
 | `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` | — | server TURN per le chiamate (facoltativo, `TURN_URLS` separati da virgola) |
 
 ## Test
@@ -125,6 +129,7 @@ cd app && npm run typecheck
 | GET    | `/api/me`                                 | utente corrente                               |
 | GET    | `/api/users?q=`                           | trova una persona dal nome utente esatto      |
 | GET    | `/api/contacts`                           | persone con una chat privata accettata        |
+| GET/POST/DELETE | `/api/invites`, `/api/invites/:code` | inviti (GET `/:code` è pubblico: chi invita) |
 | POST   | `/api/conversations/:id/accept`, `/decline` | accetta o elimina una richiesta di messaggio |
 | GET/POST/DELETE | `/api/blocks`, `/api/blocks/:userId` | persone bloccate                           |
 | GET    | `/api/conversations`                      | le mie chat, con membri, ultimo messaggio e non letti |

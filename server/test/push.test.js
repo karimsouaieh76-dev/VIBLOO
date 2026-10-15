@@ -32,7 +32,7 @@ before(async () => {
   await new Promise((r) => pushService.listen(0, r));
   pushPort = pushService.address().port;
 
-  server = await createServer({ dbFile: ":memory:", secret: "test-secret" });
+  server = await createServer({ dbFile: ":memory:", secret: "test-secret", inviteOnly: false });
   await new Promise((r) => server.httpServer.listen(0, r));
   base = `http://127.0.0.1:${server.httpServer.address().port}`;
 });

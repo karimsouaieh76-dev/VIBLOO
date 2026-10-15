@@ -560,6 +560,9 @@ function RecordingLevels({ t }: { t: Theme }) {
   );
 }
 
+// Long links or words without spaces wrap inside the bubble instead of widening it.
+const breakLongWords = Platform.OS === "web" ? ({ wordBreak: "break-word", overflowWrap: "anywhere" } as object) : {};
+
 // Browsers draw a focus ring on text fields; the rounded field is enough here.
 const noOutline = Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : {};
 
@@ -609,7 +612,7 @@ const styles = (t: Theme) => StyleSheet.create({
   // Text and time share a wrapping row: the time sits beside short messages
   // and drops to its own line, right-aligned, under long ones.
   content: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", columnGap: 8 },
-  text: { fontSize: 15.5, lineHeight: 21, color: t.fg, flexShrink: 1 },
+  text: { fontSize: 15.5, lineHeight: 21, color: t.fg, flexShrink: 1, minWidth: 0, ...breakLongWords },
   deleted: { fontSize: 14.5, fontStyle: "italic", color: t.muted, flexShrink: 1 },
   meta: { flexDirection: "row", alignItems: "center", gap: 4, marginLeft: "auto", marginBottom: -1 },
   time: { fontSize: 11, color: t.muted },

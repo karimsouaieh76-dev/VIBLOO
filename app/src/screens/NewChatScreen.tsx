@@ -168,7 +168,7 @@ const styles = (t: Theme) => StyleSheet.create({
   groupBox: { paddingHorizontal: 16, gap: 8, paddingBottom: 4 },
   chips: { color: t.accent, fontSize: 14, fontWeight: "600" },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 8 },
-  input: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, color: t.fg },
+  input: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 11, fontSize: 16, color: t.fg },
   error: { color: t.danger, paddingHorizontal: 16, paddingBottom: 6 },
   row: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 10 },
   name: { fontSize: 16, fontWeight: "600", color: t.fg },

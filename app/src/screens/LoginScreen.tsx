@@ -130,7 +130,7 @@ const styles = (t: Theme) => StyleSheet.create({
   tabTextOn: { color: t.accentFg },
   label: { fontSize: 12, fontWeight: "600", color: t.muted, textTransform: "uppercase", letterSpacing: 0.8, marginTop: 8 },
   input: { backgroundColor: t.panel, borderWidth: 1, borderColor: t.line, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, color: t.fg },
-  mono: { fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }), fontSize: 14 },
+  mono: { fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }), fontSize: 16 },
   inviteOk: { color: t.online, fontSize: 13.5, fontWeight: "600" },
   inviteHint: { color: t.muted, fontSize: 13 },
   error: { color: t.danger, marginTop: 8 },

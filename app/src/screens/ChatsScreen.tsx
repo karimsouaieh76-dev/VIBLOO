@@ -229,7 +229,7 @@ const styles = (t: Theme) => StyleSheet.create({
   reqIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: t.accentSoft, alignItems: "center", justifyContent: "center" },
   reqRowText: { flex: 1, fontSize: 16, fontWeight: "600", color: t.fg },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 8 },
-  search: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: t.fg },
+  search: { backgroundColor: t.panel, borderRadius: 12, borderWidth: 1, borderColor: t.line, paddingHorizontal: 14, paddingVertical: 10, fontSize: 16, color: t.fg },
   row: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 16, paddingVertical: 10 },
   rowBody: { flex: 1, minWidth: 0, gap: 3 },
   rowTop: { flexDirection: "row", alignItems: "center", gap: 8 },

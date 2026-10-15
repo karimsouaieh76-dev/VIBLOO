@@ -30,11 +30,16 @@ const head = [
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-title" content="Vibloo">',
   '<meta name="apple-mobile-web-app-status-bar-style" content="default">',
+  // The app is a fixed screen: never scroll sideways or bounce the whole page.
+  "<style>html,body,#root{width:100%;max-width:100%;overflow-x:hidden;overscroll-behavior:none}" +
+    "input,textarea{font-size:16px}</style>",
 ].join("");
 const html = readFileSync(indexUrl, "utf8")
   // Lets the page reach under the iPhone home bar, so the app can keep its
   // controls clear of it (safe-area insets are 0 without this).
-  .replace(/<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />')
+  // maximum-scale=1 stops iPhone Safari zooming in when a text field gets focus
+  // (and leaving the page wider than the screen); pinch-zoom still works.
+  .replace(/<meta name="viewport"[^>]*>/, '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />')
   .replace(/<html lang="[^"]*"/, '<html lang="it"')
   .replace(/<title>[^<]*<\/title>/, "<title>Vibloo</title>")
   .replace("</head>", head + "</head>");

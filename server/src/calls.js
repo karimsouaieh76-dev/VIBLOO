@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 const RING_TIMEOUT = Number(process.env.CALL_RING_TIMEOUT_MS) || 45 * 1000;
+// While a call rings, the phone gets a fresh notification this often, so it
+// keeps sounding and vibrating like a ringtone instead of chiming once.
+const ringRepeat = () => Number(process.env.CALL_RING_REPEAT_MS) || 6 * 1000;
 
 // Voice and video calls between two people. Audio and video travel directly
 // between the two devices (WebRTC); the server only rings, relays the
@@ -23,6 +26,7 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
         body: call.media === "video" ? "📹 Videochiamata persa" : "📞 Chiamata persa",
         conversationId: call.conversationId,
         tag: `c${call.conversationId}`,
+        callId: call.id,
       });
     }
   }
@@ -30,6 +34,7 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
   async function end(call, reason, byUserId) {
     if (!calls.has(call.id)) return;
     clearTimeout(call.timer);
+    clearInterval(call.ringer);
     calls.delete(call.id);
     for (const id of [call.from.id, call.to.id]) if (activeByUser.get(id) === call.id) activeByUser.delete(id);
     const payload = { callId: call.id, reason };
@@ -71,7 +76,7 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
         id: randomUUID(), conversationId: convId, media: kind,
         from: { id: user.id, username: user.username, avatarAt: (await db.findUserById(user.id))?.avatarAt ?? null },
         to: { id: other.id, username: other.username, avatarAt: other.avatarAt ?? null },
-        callerSocket: socket.id, calleeSocket: null, answeredAt: null, timer: null,
+        callerSocket: socket.id, calleeSocket: null, answeredAt: null, timer: null, ringer: null,
       };
       if (activeByUser.has(other.id)) {
         calls.set(call.id, call);
@@ -86,20 +91,31 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
 
       io.to(userRoom(other.id)).emit("call:incoming", incomingPayload(call));
       // Always notify: a phone that just closed the app may still look "on screen".
-      // A late notification is useless, so it expires with the ringing.
-      push.send([other.id], {
-        title: user.username,
-        body: kind === "video" ? "📹 Videochiamata in arrivo" : "📞 Chiamata in arrivo",
-        conversationId: convId,
-        tag: `call-${call.id}`,
-        call: true,
-      }, { ttl: Math.ceil(RING_TIMEOUT / 1000) }).catch((err) => console.error(err));
+      // A late notification is useless, so each one expires with the ringing.
+      const startedAt = Date.now();
+      let ring = 0;
+      const ringPush = () => {
+        const left = Math.ceil((startedAt + RING_TIMEOUT - Date.now()) / 1000);
+        if (left <= 1 || !calls.has(call.id) || call.answeredAt) return clearInterval(call.ringer);
+        ring += 1;
+        push.send([other.id], {
+          title: user.username,
+          body: kind === "video" ? "📹 Videochiamata in arrivo" : "📞 Chiamata in arrivo",
+          conversationId: convId,
+          tag: `r${ring}-${call.id.slice(0, 8)}`,
+          callId: call.id,
+          call: true,
+        }, { ttl: left }).catch((err) => console.error(err));
+      };
+      ringPush();
+      call.ringer = setInterval(ringPush, ringRepeat());
     });
 
     handle("call:accept", async ({ callId }, reply) => {
       const call = calls.get(callId);
       if (!call || call.to.id !== user.id || call.answeredAt) return reply({ error: "La chiamata è già terminata." });
       clearTimeout(call.timer);
+      clearInterval(call.ringer);
       call.answeredAt = Date.now();
       call.calleeSocket = socket.id;
       reply({ ok: true, media: call.media, from: call.from });

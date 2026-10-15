@@ -103,12 +103,17 @@ test("notifica push a chi non ha l'app aperta", async () => {
   assert.equal(await waitFor(() => received.length > 1, 600), false, "nessuna notifica con l'app aperta");
 
   // A call always rings the phone, even if it still looks "on screen",
-  // and the notification expires with the ringing.
+  // keeps ringing with repeated notifications, and each expires with the ringing.
+  process.env.CALL_RING_REPEAT_MS = "150";
   const ringing = await sa.emitWithAck("call:invite", { conversationId: conversation.id, media: "audio" });
   assert.ok(await waitFor(() => received.length === 2), "notifica di chiamata anche con l'app aperta");
   assert.equal(received[1].headers.ttl, "45");
+  assert.ok(await waitFor(() => received.length >= 4), "il telefono continua a squillare");
   await sa.emitWithAck("call:hangup", { callId: ringing.callId });
-  received.splice(1, 1);
+  const rings = received.length;
+  assert.equal(await waitFor(() => received.length > rings, 500), false, "smette di squillare dopo la chiusura");
+  delete process.env.CALL_RING_REPEAT_MS;
+  received.splice(1);
 
   // App in background again: notifications resume.
   sb.emit("visibility", { visible: false });

@@ -47,6 +47,16 @@ test("registrazione, login e validazione", async () => {
   assert.equal((await call("GET", "/api/me", "token-falso")).status, 401);
 });
 
+test("password corte ammesse, ma i tentativi sbagliati vengono frenati", async () => {
+  const short = (username, password) => call("POST", "/api/register", null, { username, password });
+  assert.equal((await short("corto", "abc")).status, 400);
+  assert.equal((await short("corto", "1234")).status, 201);
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await call("POST", "/api/login", null, { username: "corto", password: `x${i}xx` })).status, 401);
+  }
+  assert.equal((await call("POST", "/api/login", null, { username: "corto", password: "1234" })).status, 429);
+});
+
 test("chat privata: messaggi, spunte, non letti, scrittura e presenza", async () => {
   const bruno = await register("bruno");
   const carla = await register("carla");

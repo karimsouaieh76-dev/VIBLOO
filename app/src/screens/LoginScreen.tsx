@@ -94,7 +94,7 @@ export function LoginScreen({ initialServerUrl, initialInvite, onLoggedIn }: Pro
         <TextInput
           style={s.input} value={password} onChangeText={setPassword} secureTextEntry
           autoComplete={mode === "login" ? "password" : "new-password"}
-          placeholder={mode === "register" ? "almeno 8 caratteri" : ""} placeholderTextColor={t.muted}
+          placeholder={mode === "register" ? "almeno 4 caratteri" : ""} placeholderTextColor={t.muted}
           onSubmitEditing={submit}
         />
         {!SAME_ORIGIN && (

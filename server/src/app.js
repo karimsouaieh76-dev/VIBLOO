@@ -131,8 +131,8 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     if (typeof username !== "string" || !USERNAME_RE.test(username)) {
       return res.status(400).json({ error: "Il nome utente deve avere 3-24 caratteri: lettere, numeri, punto o trattino basso." });
     }
-    if (typeof password !== "string" || password.length < 8) {
-      return res.status(400).json({ error: "La password deve avere almeno 8 caratteri." });
+    if (typeof password !== "string" || password.length < 4) {
+      return res.status(400).json({ error: "La password deve avere almeno 4 caratteri." });
     }
     if (await db.findUserByName(username)) {
       return res.status(409).json({ error: "Questo nome utente è già in uso." });
@@ -204,12 +204,26 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     res.json({ ok: true });
   });
 
+  // Short passwords are allowed, so guessing is slowed down instead:
+  // after 10 wrong attempts on a name, that name waits 15 minutes.
+  const failedLogins = new Map(); // lowercased username -> { count, until }
   app.post("/api/login", async (req, res) => {
     const { username, password } = req.body ?? {};
+    const key = typeof username === "string" ? username.toLowerCase() : "";
+    const fails = failedLogins.get(key);
+    if (fails && fails.until > Date.now() && fails.count >= 10) {
+      return res.status(429).json({ error: "Troppi tentativi sbagliati. Riprova tra qualche minuto." });
+    }
     const row = typeof username === "string" ? await db.findUserByName(username) : null;
     if (!row || typeof password !== "string" || !(await verifyPassword(password, row.password_hash))) {
+      const now = Date.now();
+      const f = fails && fails.until > now ? fails : { count: 0, until: now + 15 * 60 * 1000 };
+      f.count += 1;
+      failedLogins.set(key, f);
+      if (failedLogins.size > 10000) for (const [k, v] of failedLogins) if (v.until <= now) failedLogins.delete(k);
       return res.status(401).json({ error: "Nome utente o password non corretti." });
     }
+    failedLogins.delete(key);
     const user = { id: row.id, username: row.username };
     res.json({ token: tokens.sign(user), user: { ...user, avatarAt: row.avatar_at ?? null } });
   });

@@ -69,6 +69,15 @@ export function messagePreview(m: Message, me: User) {
   return m.text;
 }
 
+// "Notifiche silenziate fino alle 18:30" / "… per sempre".
+export function mutedLabel(until: number) {
+  if (until > Date.now() + 5 * 365 * 24 * 3600 * 1000) return "Notifiche silenziate";
+  const d = new Date(until);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  return `Notifiche silenziate fino ${sameDay ? "alle" : `al ${d.toLocaleDateString("it-IT", { day: "numeric", month: "short" })},`} ${time}`;
+}
+
 // WhatsApp-style ticks: every other member must have received / read it.
 export function messageStatus(c: Conversation, me: User, m: Message): Status {
   const others = otherMembers(c, me);

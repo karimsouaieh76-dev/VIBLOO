@@ -231,7 +231,8 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     if (fails && fails.until > Date.now() && fails.count >= 10) {
       return res.status(429).json({ error: "Troppi tentativi sbagliati. Riprova tra qualche minuto." });
     }
-    const row = typeof username === "string" ? await db.findUserByName(username) : null;
+    const found = typeof username === "string" ? await db.findUserByName(username) : null;
+    const row = found?.deleted_at ? null : found;
     if (!row || typeof password !== "string" || !(await verifyPassword(password, row.password_hash))) {
       const now = Date.now();
       const f = fails && fails.until > now ? fails : { count: 0, until: now + 15 * 60 * 1000 };
@@ -243,6 +244,29 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     failedLogins.delete(key);
     const user = { id: row.id, username: row.username };
     res.json({ token: tokens.sign(user, row.token_version ?? 0), user: { ...user, avatarAt: row.avatar_at ?? null } });
+  });
+
+  // Deleting the account needs the password. People who chatted with it keep
+  // the messages; it shows up as "Account eliminato".
+  app.delete("/api/me", requireUser, async (req, res) => {
+    const row = await db.findUserByName(req.user.username);
+    if (!row || typeof req.body?.password !== "string" || !(await verifyPassword(req.body.password, row.password_hash))) {
+      return res.status(403).json({ error: "Password non corretta." });
+    }
+    const people = await db.coMembers(row.id);
+    const groups = await db.deleteAccount(row.id);
+    versions.delete(row.id);
+    for (const s of await io.in(userRoom(row.id)).fetchSockets()) s.disconnect(true);
+    for (const g of groups) await pushSummaries(g);
+    for (const other of people) {
+      io.to(userRoom(other)).emit("profile", { userId: row.id, avatarAt: null });
+      const { id: convId } = await db.findDirect(row.id, other);
+      if (convId) {
+        const view = await summary(other, convId);
+        if (view) io.to(userRoom(other)).emit("conversation:update", view);
+      }
+    }
+    res.json({ ok: true });
   });
 
   app.put("/api/me/password", requireUser, async (req, res) => {
@@ -461,6 +485,95 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
     res.status(created ? 201 : 200).json({ conversation: await summary(me, id) });
   });
 
+  // ---------- groups ----------
+  // A short line in the chat ("Anna ha aggiunto Bruno"), sent to everyone in it.
+  const systemMessage = async (conversationId, userId, text) => {
+    const message = await db.addMessage(conversationId, userId, text, null, "system");
+    await toMembers(conversationId, "message:new", message);
+  };
+  const groupFor = async (req, res) => {
+    const id = toId(req.params.id);
+    const meta = id && (await db.conversationMeta(id));
+    if (!meta || !meta.isGroup || (await db.memberStatus(id, req.user.id)) !== "accepted") {
+      res.status(404).json({ error: "Gruppo non trovato." });
+      return null;
+    }
+    return { id, ...meta, admin: await db.groupAdmin(id) };
+  };
+
+  app.put("/api/conversations/:id", requireUser, async (req, res) => {
+    const g = await groupFor(req, res);
+    if (!g) return;
+    const name = String(req.body?.name ?? "").trim();
+    if (!name || name.length > 40) return res.status(400).json({ error: "Il nome del gruppo deve avere da 1 a 40 caratteri." });
+    if (name === g.name) return res.json({ conversation: await summary(req.user.id, g.id) });
+    await db.renameGroup(g.id, name);
+    await systemMessage(g.id, req.user.id, `${req.user.username} ha cambiato il nome del gruppo in «${name}»`);
+    await pushSummaries(g.id);
+    res.json({ conversation: await summary(req.user.id, g.id) });
+  });
+
+  app.post("/api/conversations/:id/members", requireUser, async (req, res) => {
+    const g = await groupFor(req, res);
+    if (!g) return;
+    if (g.admin !== req.user.id) return res.status(403).json({ error: "Solo l'amministratore del gruppo può aggiungere persone." });
+    const userIds = Array.isArray(req.body?.userIds) ? [...new Set(req.body.userIds.map(toId).filter(Boolean))] : [];
+    if (!userIds.length) return res.status(400).json({ error: "Scegli chi aggiungere." });
+    if ((await db.memberCount(g.id)) + userIds.length > MAX_GROUP) {
+      return res.status(400).json({ error: `Un gruppo può avere al massimo ${MAX_GROUP} persone.` });
+    }
+    const blockers = new Set(await db.blockersOf(req.user.id));
+    const names = [];
+    for (const u of userIds) {
+      const person = await db.findUserById(u);
+      if (!person || (await db.isDeleted(u))) return res.status(400).json({ error: "Una delle persone scelte non esiste più." });
+      if (blockers.has(u)) return res.status(403).json({ error: `${person.username} non può essere aggiunto al gruppo.` });
+      names.push(person.username);
+    }
+    const added = await db.addMembers(g.id, req.user.id, userIds);
+    if (added.length) {
+      await systemMessage(g.id, req.user.id, `${req.user.username} ha aggiunto ${names.filter((_, i) => added.includes(userIds[i])).join(", ")}`);
+      for (const u of added) io.to(userRoom(u)).emit("conversation:new", await summary(u, g.id));
+      await pushSummaries(g.id);
+    }
+    res.json({ conversation: await summary(req.user.id, g.id) });
+  });
+
+  // Removing someone (admin only), or yourself (leaving the group).
+  app.delete("/api/conversations/:id/members/:userId", requireUser, async (req, res) => {
+    const g = await groupFor(req, res);
+    if (!g) return;
+    const target = toId(req.params.userId);
+    const leaving = target === req.user.id;
+    if (!leaving && g.admin !== req.user.id) return res.status(403).json({ error: "Solo l'amministratore può togliere persone dal gruppo." });
+    const person = target && (await db.findUserById(target));
+    if (!person || !(await db.memberStatus(g.id, target))) return res.status(404).json({ error: "Questa persona non è nel gruppo." });
+    await systemMessage(g.id, req.user.id,
+      leaving ? `${req.user.username} è uscito dal gruppo` : `${req.user.username} ha tolto ${person.username}`);
+    await db.removeMember(g.id, target);
+    io.to(userRoom(target)).emit("conversation:removed", { id: g.id });
+    await pushSummaries(g.id);
+    res.json({ ok: true });
+  });
+
+  // Silence a chat: until a time (ms since 1970), forever (-1), or null to turn notifications back on.
+  app.put("/api/conversations/:id/mute", requireUser, async (req, res) => {
+    const id = toId(req.params.id);
+    if (!id || !(await db.memberStatus(id, req.user.id))) return res.status(404).json({ error: "Chat non trovata." });
+    const until = req.body?.until;
+    const value = until === -1 ? 4102444800000 /* 2100 */ : Number.isFinite(until) && until > Date.now() ? Math.round(until) : null;
+    await db.setMuted(id, req.user.id, value);
+    const view = await summary(req.user.id, id);
+    io.to(userRoom(req.user.id)).emit("conversation:update", view);
+    res.json({ conversation: view });
+  });
+
+  app.get("/api/search", requireUser, async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
+    if (q.length < 2) return res.json({ messages: [] });
+    res.json({ messages: await db.searchMessages(req.user.id, q.slice(0, 100)) });
+  });
+
   app.get("/api/conversations/:id/messages", requireUser, async (req, res) => {
     const id = toId(req.params.id);
     if (!id || !(await db.isMember(id, req.user.id))) return res.status(404).json({ error: "Chat non trovata." });
@@ -566,8 +679,11 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
   const notify = (conversationId, message, userIds) => {
     if (!userIds.length) return;
     (async () => {
+      const muted = new Set(await db.mutedIn(conversationId));
+      const to = userIds.filter((id) => !muted.has(id));
+      if (!to.length) return;
       const meta = await db.conversationMeta(conversationId);
-      await push.send(userIds, { ...notificationText(message, meta), conversationId, tag: `c${conversationId}` });
+      await push.send(to, { ...notificationText(message, meta), conversationId, tag: `c${conversationId}` });
     })().catch((err) => console.error(err));
   };
 
@@ -610,6 +726,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
         return reply({ error: "Hai bloccato questa persona: sbloccala per scriverle." });
       }
       if (partner && (await db.blockedBy(partner)).includes(user.id)) return reply({ error: "Non puoi scrivere a questa persona." });
+      if (partner && (await db.isDeleted(partner))) return reply({ error: "Questo account è stato eliminato." });
       let attachment = null;
       if (attachmentId !== undefined && attachmentId !== null) {
         attachment = await db.attachmentInfo(toId(attachmentId) ?? 0);
@@ -682,7 +799,7 @@ export async function createServer({ dbFile = "vibloo.db", databaseUrl, secret, 
       const updated = await db.react(m.id, user.id, next);
       reply({ message: updated });
       await toMembers(updated.conversationId, "message:update", updated);
-      if (next && m.userId !== user.id && !isLooking(m.userId)) {
+      if (next && m.userId !== user.id && !isLooking(m.userId) && !(await db.mutedIn(m.conversationId)).includes(m.userId)) {
         const what = m.text ? `«${m.text.slice(0, 60)}»` : "al tuo messaggio";
         push.send([m.userId], {
           title: user.username, body: `Ha reagito ${next} ${what}`, conversationId: m.conversationId, tag: `c${m.conversationId}`,

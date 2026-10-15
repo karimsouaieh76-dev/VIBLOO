@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 export type User = { id: number; username: string; avatarAt?: number | null };
 export type Person = User & { online: boolean; lastSeen: number | null; avatarAt: number | null };
 export type MemberStatus = "accepted" | "pending";
-export type Member = Person & { lastReadId: number; lastDeliveredId: number; status: MemberStatus };
+export type Member = Person & { lastReadId: number; lastDeliveredId: number; status: MemberStatus; deleted?: boolean };
 export type Attachment = {
   id: number;
   mime: string;
@@ -13,7 +13,7 @@ export type Attachment = {
   height: number | null;
   duration: number | null; // milliseconds, voice notes only
 };
-export type MessageKind = "text" | "image" | "audio" | "file" | "call";
+export type MessageKind = "text" | "image" | "audio" | "file" | "call" | "system";
 export type Message = {
   id: number;
   conversationId: number;
@@ -57,6 +57,8 @@ export type Conversation = {
   updatedAt: number;
   myStatus: MemberStatus; // "pending": a message request I have not answered
   blockedByMe: boolean;
+  createdBy?: number | null; // group admin
+  mutedUntil?: number | null; // notifications silenced until then
 };
 
 // On the web the app is served by the chat server itself, so it talks to the
@@ -124,6 +126,15 @@ export function createApi(baseUrl: string, token?: string) {
     openDirect: (userId: number) => post<{ conversation: Conversation }>("/api/conversations", { userId }),
     createGroup: (name: string, userIds: number[]) =>
       post<{ conversation: Conversation }>("/api/conversations", { name, userIds }),
+    renameGroup: (id: number, name: string) =>
+      request<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
+    addMembers: (id: number, userIds: number[]) => post<{ conversation: Conversation }>(`/api/conversations/${id}/members`, { userIds }),
+    removeMember: (id: number, userId: number) =>
+      request<{ ok: true }>(`/api/conversations/${id}/members/${userId}`, { method: "DELETE" }),
+    mute: (id: number, until: number | null) =>
+      request<{ conversation: Conversation }>(`/api/conversations/${id}/mute`, { method: "PUT", body: JSON.stringify({ until }) }),
+    search: (q: string) => request<{ messages: Message[] }>(`/api/search?q=${encodeURIComponent(q)}`),
+    deleteAccount: (password: string) => request<{ ok: true }>("/api/me", { method: "DELETE", body: JSON.stringify({ password }) }),
     messages: (conversationId: number, before?: number) =>
       request<{ messages: Message[] }>(`/api/conversations/${conversationId}/messages${before ? `?before=${before}` : ""}`),
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Api, Conversation, User } from "../api";
+import type { Api, Conversation, Message, User } from "../api";
 import type { Messenger } from "../useMessenger";
 import { Avatar, Ticks } from "../components";
 import { conversationTitle, formatListDate, messagePreview, messageStatus, otherMembers } from "../format";
@@ -63,6 +63,15 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
       setPushError("Non sono riuscito ad attivare le notifiche. Riprova più tardi.");
     }
   }
+
+  // Messages containing the words, from the server (after a short pause in typing).
+  const [found, setFound] = useState<Message[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2 || showRequests) { setFound([]); return; }
+    const timer = setTimeout(() => { api.search(q).then((r) => setFound(r.messages)).catch(() => setFound([])); }, 350);
+    return () => clearTimeout(timer);
+  }, [query, api, showRequests]);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -126,7 +135,7 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
       {pushInfo ? <Text style={s.pushOff}>{pushInfo}</Text> : null}
       <View style={s.searchWrap}>
         <TextInput
-          style={s.search} value={query} onChangeText={setQuery} placeholder="Cerca nelle chat"
+          style={s.search} value={query} onChangeText={setQuery} placeholder="Cerca chat e messaggi"
           placeholderTextColor={t.muted} autoCapitalize="none" autoCorrect={false}
         />
       </View>
@@ -145,12 +154,36 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
         contentContainerStyle={{ paddingBottom: 96 + insets.bottom, flexGrow: 1 }}
         renderItem={({ item }) => <Row c={item} me={me} typing={Object.values(messenger.typing[item.id] ?? {})} onPress={() => onOpen(item)} t={t} />}
         ItemSeparatorComponent={() => <View style={s.sep} />}
+        ListFooterComponent={found.length ? (
+          <View>
+            <Text style={s.foundTitle}>Messaggi</Text>
+            {found.map((m) => {
+              const conv = messenger.conversations.find((c) => c.id === m.conversationId);
+              if (!conv) return null;
+              return (
+                <Pressable
+                  key={m.id} onPress={() => onOpen(conv)} accessibilityRole="button"
+                  style={({ pressed }) => [s.foundRow, pressed && { backgroundColor: t.accentSoft }]}
+                >
+                  <View style={s.rowTop}>
+                    <Text style={s.title} numberOfLines={1}>{conversationTitle(conv, me)}</Text>
+                    <Text style={s.date}>{formatListDate(m.createdAt)}</Text>
+                  </View>
+                  <Text style={s.preview} numberOfLines={2}>
+                    {m.userId === me.id ? "Tu: " : conv.isGroup ? `${m.username}: ` : ""}
+                    <Highlight text={messagePreview(m, me)} q={query.trim()} t={t} />
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
         ListEmptyComponent={
-          messenger.loaded ? (
+          messenger.loaded && !found.length ? (
             <View style={s.empty}>
-              <Text style={s.emptyTitle}>{query ? "Nessuna chat trovata" : "Nessuna chat, per ora"}</Text>
+              <Text style={s.emptyTitle}>{query ? "Nessun risultato" : "Nessuna chat, per ora"}</Text>
               <Text style={s.emptyBody}>
-                {query ? "Prova con un altro nome." : "Tocca il pulsante qui sotto per scrivere a qualcuno o creare un gruppo."}
+                {query ? "Prova con un altro nome o altre parole." : "Tocca il pulsante qui sotto per scrivere a qualcuno o creare un gruppo."}
               </Text>
             </View>
           ) : null
@@ -164,6 +197,19 @@ export function ChatsScreen({ me, api, messenger, onOpen, onNewChat, onProfile }
         <Text style={s.fabText}>＋</Text>
       </Pressable>}
     </View>
+  );
+}
+
+// The searched words in bold.
+function Highlight({ text, q, t }: { text: string; q: string; t: Theme }) {
+  const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (i < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, i)}
+      <Text style={{ color: t.fg, fontWeight: "700" }}>{text.slice(i, i + q.length)}</Text>
+      {text.slice(i + q.length)}
+    </>
   );
 }
 
@@ -182,7 +228,7 @@ function Row({ c, me, typing, onPress, t }: { c: Conversation; me: User; typing:
       <View style={s.previewRow}>
         {mine && !last.deletedAt && <Ticks status={messageStatus(c, me, last)} />}
         <Text style={s.preview} numberOfLines={1}>
-          {c.isGroup && !mine && !last.deletedAt ? `${last.username}: ` : ""}{messagePreview(last, me)}
+          {c.isGroup && !mine && !last.deletedAt && last.kind !== "system" ? `${last.username}: ` : ""}{messagePreview(last, me)}
         </Text>
       </View>
     );
@@ -200,7 +246,8 @@ function Row({ c, me, typing, onPress, t }: { c: Conversation; me: User; typing:
         </View>
         <View style={s.rowTop}>
           <View style={{ flex: 1 }}>{preview}</View>
-          {c.unread > 0 && <View style={s.badge}><Text style={s.badgeText}>{c.unread > 99 ? "99+" : c.unread}</Text></View>}
+          {c.mutedUntil ? <Ionicons name="notifications-off" size={15} color={t.muted} accessibilityLabel="Silenziata" /> : null}
+          {c.unread > 0 && <View style={[s.badge, c.mutedUntil ? { backgroundColor: t.muted } : null]}><Text style={s.badgeText}>{c.unread > 99 ? "99+" : c.unread}</Text></View>}
         </View>
       </View>
     </Pressable>
@@ -240,6 +287,11 @@ const styles = (t: Theme) => StyleSheet.create({
   typing: { fontSize: 14.5, color: t.online, fontWeight: "600" },
   badge: { backgroundColor: t.online, borderRadius: 11, minWidth: 22, height: 22, paddingHorizontal: 6, alignItems: "center", justifyContent: "center" },
   badgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  foundTitle: {
+    fontSize: 12, fontWeight: "700", color: t.muted, textTransform: "uppercase", letterSpacing: 0.8,
+    paddingHorizontal: 16, paddingTop: 18, paddingBottom: 4,
+  },
+  foundRow: { paddingHorizontal: 16, paddingVertical: 10, gap: 3 },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: t.line, marginLeft: 78 },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 6 },
   emptyTitle: { fontSize: 19, fontWeight: "700", color: t.fg },

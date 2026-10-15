@@ -67,6 +67,7 @@ export function createCalls({ io, db, push, isLooking, userRoom }) {
       if (!other) return reply({ error: "Persona non trovata." });
       if ((await db.memberStatus(convId, user.id)) !== "accepted") return reply({ error: "Accetta la richiesta per poter chiamare." });
       if (await db.eitherBlocked(user.id, other.id)) return reply({ error: "Non puoi chiamare questa persona." });
+      if (await db.isDeleted(other.id)) return reply({ error: "Questo account è stato eliminato." });
       if ((await db.memberStatus(convId, other.id)) !== "accepted") {
         return reply({ error: `Potrai chiamare ${other.username} quando avrà accettato la tua richiesta di messaggio.` });
       }

@@ -9,6 +9,12 @@ App di messaggistica istantanea, in stile WhatsApp:
 - messaggi mostrati subito con l'orologio e, se la rete cade, pulsante "Riprova";
 - **foto** (ridotte automaticamente), **messaggi vocali** e **file** fino a 15 MB;
 - **modifica** (entro 24 ore) ed **eliminazione per tutti**: tieni premuto un tuo messaggio;
+- **rispondi** a un messaggio (con la citazione) e **reazioni** con le emoji: tieni premuto un messaggio;
+- **gruppi**: nome modificabile, l'amministratore aggiunge e toglie persone, si può uscire;
+- **silenzia** una chat (8 ore, 1 settimana, sempre) e **cerca** nei messaggi dalla lista chat;
+- **password**: cambio dal Profilo; chi ha invitato una persona (o il primo account) crea un codice
+  di ripristino per chi l'ha dimenticata; dopo 10 tentativi sbagliati il nome si blocca 15 minuti;
+- **elimina account** dal Profilo (i messaggi già inviati restano, firmati «Account eliminato»);
 - **notifiche push** quando l'app è chiusa o in secondo piano;
 - **privacy**: si trova una persona solo scrivendo il suo nome utente esatto; chi ti scrive per
   la prima volta finisce in **Richieste di messaggio** (Accetta / Elimina / Blocca) e finché non
@@ -108,6 +114,9 @@ Con Expo Go, nella schermata di accesso scrivi l'indirizzo del server mostrato a
 (per esempio `http://192.168.1.20:3000`).
 
 ## Variabili del server
+
+- `KEEP_AWAKE=false` — su Render il server visita se stesso ogni 10 minuti per non addormentarsi
+  (piano gratuito); questa variabile lo disattiva.
 
 | Variabile    | Default         | Note                                       |
 |--------------|-----------------|--------------------------------------------|

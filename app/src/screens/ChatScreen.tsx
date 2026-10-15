@@ -12,10 +12,11 @@ import type { Api, Conversation, LocalFile, User } from "../api";
 import type { ChatMessage, Messenger } from "../useMessenger";
 import { ActionSheet, AudioBubble, Avatar, FileBubble, PhotoThumb, PhotoViewer, SheetOption, Ticks } from "../components";
 import {
-  callLabel, conversationTitle, formatDay, formatDuration, formatLastSeen, formatTime, messageStatus, otherMembers,
+  callLabel, conversationTitle, formatDay, formatDuration, formatLastSeen, formatTime, messageStatus, mutedLabel, otherMembers,
   parseCall, Status,
 } from "../format";
 import { pickFile, pickPhoto, webRecordingMime } from "../media";
+import { GroupInfoScreen } from "./GroupInfoScreen";
 import { mediaErrorMessage } from "../mediaErrors";
 import { avatarColor, Theme, useTheme } from "../theme";
 
@@ -61,7 +62,7 @@ function buildRows(list: ChatMessage[]): Row[] {
     }
     const first = !prev || prev.userId !== m.userId || m.createdAt - prev.createdAt > 5 * 60 * 1000;
     rows.push({ kind: "msg", key: `m${m.id}`, m, first });
-    prev = m;
+    prev = m.kind === "system" ? null : m;
   }
   return rows.reverse();
 }
@@ -99,8 +100,24 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
   const isRequest = c.myStatus === "pending"; // someone I don't know wrote to me
   const blocked = c.blockedByMe;
   const requestSent = !isRequest && partner?.status === "pending"; // I wrote, they haven't accepted
-  const canCall = Boolean(onCall) && !c.isGroup && !isRequest && !blocked && !requestSent;
-  const canWrite = !isRequest && !blocked;
+  const partnerGone = Boolean(partner?.deleted); // the other person deleted the account
+  const canCall = Boolean(onCall) && !c.isGroup && !isRequest && !blocked && !requestSent && !partnerGone;
+  const canWrite = !isRequest && !blocked && !partnerGone;
+  const [muteMenu, setMuteMenu] = useState(false);
+  const [groupInfo, setGroupInfo] = useState(false);
+
+  // Removed from the group (or the chat went away): back to the list.
+  useEffect(() => {
+    if (messenger.loaded && !messenger.conversations.some((x) => x.id === initial.id)) onBack();
+  }, [messenger.loaded, messenger.conversations, initial.id]);
+
+  async function mute(until: number | null) {
+    try {
+      messenger.addConversation((await api.mute(c.id, until)).conversation);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   const [chatMenu, setChatMenu] = useState(false);
   const [confirmBlock, setConfirmBlock] = useState(false);
 
@@ -265,12 +282,16 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
       <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Torna alle chat"><Text style={s.back}>‹</Text></Pressable>
         <Avatar name={title} id={others[0]?.id ?? c.id} size={40} group={c.isGroup} photo={c.isGroup ? null : others[0]?.avatarAt} />
-        <View style={{ flex: 1, minWidth: 0 }}>
+        <Pressable
+          style={{ flex: 1, minWidth: 0 }} onPress={c.isGroup && !isRequest ? () => setGroupInfo(true) : undefined}
+          accessibilityRole={c.isGroup && !isRequest ? "button" : undefined}
+          accessibilityHint={c.isGroup && !isRequest ? "Apre le informazioni del gruppo" : undefined}
+        >
           <Text style={s.title} numberOfLines={1}>{title}</Text>
           {subtitle ? (
             <Text style={[s.subtitle, typers.length > 0 && { color: t.online, fontWeight: "600" }]} numberOfLines={1}>{subtitle}</Text>
           ) : null}
-        </View>
+        </Pressable>
         {canCall && onCall && (
           <>
             <Pressable onPress={() => onCall("audio")} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Chiamata vocale">
@@ -281,13 +302,14 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
             </Pressable>
           </>
         )}
-        {partner && !isRequest && (
+        {!isRequest && (
           <Pressable onPress={() => setChatMenu(true)} hitSlop={6} style={s.callBtn} accessibilityRole="button" accessibilityLabel="Altre opzioni">
             <Ionicons name="ellipsis-vertical" size={20} color={t.accent} />
           </Pressable>
         )}
       </View>
       {!messenger.connected && <Text style={s.offline}>Connessione persa: i messaggi partiranno quando torna la rete.</Text>}
+      {c.mutedUntil ? <Text style={s.infoBar}>🔕 {mutedLabel(c.mutedUntil)}</Text> : null}
       {requestSent && (
         <Text style={s.infoBar}>
           Richiesta inviata: {partner?.username} vedrà i tuoi messaggi e potrà risponderti dopo averla accettata.
@@ -319,7 +341,9 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
             renderItem={({ item }) => item.kind === "day"
               ? <View style={s.dayWrap}><Text style={s.day}>{item.label}</Text></View>
               : (
-                item.m.kind === "call" && !item.m.deletedAt ? (
+                item.m.kind === "system" ? (
+                  <View style={s.dayWrap}><Text style={[s.day, s.system]}>{item.m.text}</Text></View>
+                ) : item.m.kind === "call" && !item.m.deletedAt ? (
                   <CallBubble m={item.m} me={me} t={t} onPress={onCall && !c.isGroup ? () => onCall(parseCall(item.m).media) : undefined} />
                 ) : <Bubble
                   m={item.m} first={item.first} mine={item.m.userId === me.id} showName={c.isGroup}
@@ -361,6 +385,10 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
               <Text style={[s.panelBtnText, { color: t.accentFg }]}>Accetta</Text>
             </Pressable>
           </View>
+        </View>
+      ) : partnerGone ? (
+        <View style={[s.panel, { paddingBottom: bottomGap }]}>
+          <Text style={s.panelText}>{title} ha eliminato il suo account: non puoi più scrivergli né chiamarlo.</Text>
         </View>
       ) : blocked ? (
         <View style={[s.panel, { paddingBottom: bottomGap }]}>
@@ -455,10 +483,31 @@ export function ChatScreen({ me, api, messenger, conversation: initial, onBack, 
 
       <ActionSheet
         visible={chatMenu} onClose={() => setChatMenu(false)}
-        options={blocked
-          ? [{ label: `Sblocca ${title}`, onPress: () => setBlock(false) }]
-          : [{ label: `Blocca ${title}`, danger: true, onPress: () => setConfirmBlock(true) }]}
+        options={[
+          ...(c.isGroup ? [{ label: "Info gruppo", onPress: () => setGroupInfo(true) }] : []),
+          c.mutedUntil
+            ? { label: "Riattiva notifiche", onPress: () => mute(null) }
+            : { label: "Silenzia notifiche", onPress: () => setMuteMenu(true) },
+          ...(partner && !partnerGone ? [blocked
+            ? { label: `Sblocca ${title}`, onPress: () => setBlock(false) }
+            : { label: `Blocca ${title}`, danger: true, onPress: () => setConfirmBlock(true) }] : []),
+        ]}
       />
+      <ActionSheet
+        visible={muteMenu} onClose={() => setMuteMenu(false)}
+        title="Non riceverai notifiche dei messaggi di questa chat. Le chiamate squillano comunque."
+        options={[
+          { label: "Per 8 ore", onPress: () => mute(Date.now() + 8 * 3600 * 1000) },
+          { label: "Per 1 settimana", onPress: () => mute(Date.now() + 7 * 24 * 3600 * 1000) },
+          { label: "Sempre", onPress: () => mute(-1) },
+        ]}
+      />
+      {c.isGroup && (
+        <GroupInfoScreen
+          api={api} me={me} conversation={c} visible={groupInfo} onClose={() => setGroupInfo(false)}
+          onLeft={() => { setGroupInfo(false); onBack(); }}
+        />
+      )}
       <ActionSheet
         visible={confirmBlock} onClose={() => setConfirmBlock(false)}
         title={`${title} non potrà più scriverti né chiamarti, e non vedrà la tua foto né quando sei online. Non riceverà nessun avviso.`}
@@ -692,6 +741,7 @@ const styles = (t: Theme) => StyleSheet.create({
   hint: { backgroundColor: t.panel, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, maxWidth: 300 },
   hintText: { color: t.muted, textAlign: "center", fontSize: 13.5 },
   dayWrap: { alignItems: "center", marginVertical: 10 },
+  system: { fontWeight: "500", textAlign: "center", maxWidth: 300 },
   day: { backgroundColor: t.panel, color: t.muted, fontSize: 12, fontWeight: "600", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, overflow: "hidden" },
   msgRow: { flexDirection: "row", marginTop: 2 },
   bubble: { maxWidth: "82%", borderRadius: 12, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 5 },

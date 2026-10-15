@@ -11,7 +11,8 @@ export async function hashPassword(password) {
 }
 
 export async function verifyPassword(password, stored) {
-  const [saltHex, keyHex] = stored.split(":");
+  const [saltHex, keyHex] = String(stored).split(":");
+  if (!saltHex || !keyHex) return false; // a deleted account has no password
   const expected = Buffer.from(keyHex, "hex");
   const actual = await scryptAsync(password, Buffer.from(saltHex, "hex"), expected.length);
   return timingSafeEqual(expected, actual);

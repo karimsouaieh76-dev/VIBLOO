@@ -133,6 +133,8 @@ export function ProfileScreen({ me, api, avatarAt, onAvatarChanged, onBack, onLo
             </View>
           ))}
         </View>
+
+        <DeleteAccountSection api={api} t={t} onDeleted={onLogout} />
       </ScrollView>
     </View>
   );
@@ -417,5 +419,62 @@ function InviteSection({ api, base, t }: { api: Api; base: string; t: Theme }) {
         ))}
       </View>
     </>
+  );
+}
+
+// Deleting the account for good, after typing the password.
+function DeleteAccountSection({ api, t, onDeleted }: { api: Api; t: Theme; onDeleted: () => void }) {
+  const s = styles(t);
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function confirm() {
+    setNote("");
+    if (!password) return setNote("Scrivi la tua password per confermare.");
+    setBusy(true);
+    try {
+      await api.deleteAccount(password);
+      onDeleted();
+    } catch (e) {
+      setNote((e as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={[s.actions, { marginTop: 28, padding: open ? 16 : 0, gap: 10 }]}>
+      {!open ? (
+        <Pressable style={({ pressed }) => [s.row, pressed && s.pressed]} onPress={() => setOpen(true)} accessibilityRole="button">
+          <Ionicons name="trash-outline" size={22} color={t.danger} />
+          <Text style={[s.rowText, { color: t.danger }]}>Elimina account</Text>
+        </Pressable>
+      ) : (
+        <>
+          <Text style={[s.rowText, { color: t.danger, fontWeight: "700" }]}>Eliminare l'account?</Text>
+          <Text style={s.small}>
+            Non si può annullare. Il tuo nome utente, la foto e le notifiche vengono cancellati e esci dai gruppi.
+            I messaggi che hai già mandato restano a chi li ha ricevuti, firmati «Account eliminato».
+          </Text>
+          <TextInput
+            style={s.input} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password"
+            placeholder="La tua password" placeholderTextColor={t.muted} onSubmitEditing={confirm}
+          />
+          {note ? <Text style={s.error}>{note}</Text> : null}
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <Pressable style={[s.inviteBtn, { flex: 1, backgroundColor: t.danger }]} onPress={confirm} disabled={busy} accessibilityRole="button">
+              {busy ? <ActivityIndicator color="#fff" /> : <Text style={[s.inviteBtnText, { color: "#fff" }]}>Elimina per sempre</Text>}
+            </Pressable>
+            <Pressable
+              style={[s.inviteBtn, { flex: 1, backgroundColor: t.bg }]} accessibilityRole="button"
+              onPress={() => { setOpen(false); setPassword(""); setNote(""); }}
+            >
+              <Text style={[s.inviteBtnText, { color: t.fg }]}>Annulla</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
+    </View>
   );
 }

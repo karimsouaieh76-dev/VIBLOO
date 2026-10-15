@@ -123,11 +123,11 @@ export function useMessenger(serverUrl: string, token: string, me: User, api: Ap
           ...c,
           lastMessage: m,
           updatedAt: m.createdAt,
-          unread: mine || isActive ? c.unread : c.unread + 1,
+          unread: mine || isActive || m.kind === "system" ? c.unread : c.unread + 1,
         }).sort(byActivity);
       });
       clearTyping(m.conversationId, m.userId);
-      if (!mine) {
+      if (!mine && m.kind !== "system") {
         if (isActive) markRead(m.conversationId, m.id);
         else {
           emit("delivered", { conversationId: m.conversationId, messageId: m.id });

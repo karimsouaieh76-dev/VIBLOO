@@ -1,11 +1,12 @@
 // Every query the server needs, written once for both SQLite and Postgres.
 
 const MESSAGE_SELECT = `
-  SELECT m.id, m.conversation_id AS "conversationId", m.user_id AS "userId", u.username,
+  SELECT m.id, m.conversation_id AS "conversationId", m.user_id AS "userId",
+         CASE WHEN u.deleted_at IS NULL THEN u.username ELSE 'Account eliminato' END AS username,
          m.kind, m.text, m.created_at AS "createdAt", m.edited_at AS "editedAt", m.deleted_at AS "deletedAt",
          a.id AS "attId", a.mime AS "attMime", a.name AS "attName", a.size AS "attSize",
          a.width AS "attWidth", a.height AS "attHeight", a.duration AS "attDuration",
-         r.id AS "repId", ru.username AS "repUsername", r.user_id AS "repUserId", r.kind AS "repKind", r.text AS "repText",
+         r.id AS "repId", CASE WHEN ru.deleted_at IS NULL THEN ru.username ELSE 'Account eliminato' END AS "repUsername", r.user_id AS "repUserId", r.kind AS "repKind", r.text AS "repText",
          r.deleted_at AS "repDeletedAt"
   FROM chat_messages m
   JOIN users u ON u.id = m.user_id
@@ -164,6 +165,9 @@ export async function createStore(driver) {
     // accepted | pending (a message request not answered yet) | declined
     "conversation_members ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'",
     "chat_messages ADD COLUMN reply_to_id INTEGER",
+    "users ADD COLUMN deleted_at BIGINT",
+    // Until when notifications from this chat stay silent (null: not muted).
+    "conversation_members ADD COLUMN muted_until BIGINT",
     // Bumped when the password changes: older sessions stop working.
     "users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
   ]) {
@@ -198,7 +202,7 @@ export async function createStore(driver) {
     // Only an exact username finds someone: nobody can browse who is signed up.
     findByExactName: (q, exceptId) =>
       query(`SELECT id, username, last_seen AS "lastSeen", avatar_at AS "avatarAt" FROM users
-             WHERE id <> ? AND lower(username) = lower(?)`, [exceptId, q]),
+             WHERE id <> ? AND lower(username) = lower(?) AND deleted_at IS NULL`, [exceptId, q]),
     // People you already talk to: both sides accepted a private chat.
     contacts: (userId) =>
       query(`SELECT u.id, u.username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt"
@@ -206,7 +210,7 @@ export async function createStore(driver) {
              JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = ? AND me.status = 'accepted'
              JOIN conversation_members o ON o.conversation_id = c.id AND o.user_id <> ? AND o.status = 'accepted'
              JOIN users u ON u.id = o.user_id
-             WHERE c.is_group = 0 ORDER BY lower(u.username)`, [userId, userId]),
+             WHERE c.is_group = 0 AND u.deleted_at IS NULL ORDER BY lower(u.username)`, [userId, userId]),
     touchLastSeen: (userId) => query("UPDATE users SET last_seen = ? WHERE id = ?", [Date.now(), userId]),
 
     // ---------- conversations ----------
@@ -272,7 +276,8 @@ export async function createStore(driver) {
       const filter = onlyId ? "AND c.id = ?" : "";
       const params = onlyId ? [userId, onlyId] : [userId];
       const convs = await query(
-        `SELECT c.id, c.is_group AS "isGroup", c.name, c.created_at AS "createdAt", me.status AS "myStatus"
+        `SELECT c.id, c.is_group AS "isGroup", c.name, c.created_at AS "createdAt", me.status AS "myStatus",
+                c.created_by AS "createdBy", me.muted_until AS "mutedUntil"
          FROM conversations c JOIN conversation_members me ON me.conversation_id = c.id AND me.user_id = ?
          WHERE me.status <> 'declined' ${filter}`, params);
       if (!convs.length) return [];
@@ -280,8 +285,10 @@ export async function createStore(driver) {
       const inList = ids.map(() => "?").join(",");
 
       const members = await query(
-        `SELECT cm.conversation_id AS "conversationId", u.id, u.username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt",
-                cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId", cm.status
+        `SELECT cm.conversation_id AS "conversationId", u.id,
+                CASE WHEN u.deleted_at IS NULL THEN u.username ELSE 'Account eliminato' END AS username, u.last_seen AS "lastSeen", u.avatar_at AS "avatarAt",
+                cm.last_read_id AS "lastReadId", cm.last_delivered_id AS "lastDeliveredId", cm.status,
+                u.deleted_at AS "deletedAt"
          FROM conversation_members cm JOIN users u ON u.id = cm.user_id
          WHERE cm.conversation_id IN (${inList})`, ids);
       const last = (await query(
@@ -292,6 +299,7 @@ export async function createStore(driver) {
         `SELECT m.conversation_id AS "conversationId", count(*) AS n
          FROM chat_messages m JOIN conversation_members me ON me.conversation_id = m.conversation_id AND me.user_id = ?
          WHERE m.conversation_id IN (${inList}) AND m.id > me.last_read_id AND m.user_id <> ? AND m.deleted_at IS NULL
+           AND m.kind <> 'system'
          GROUP BY m.conversation_id`, [userId, ...ids, userId]);
 
       return convs.map((c) => {
@@ -301,13 +309,83 @@ export async function createStore(driver) {
           isGroup: Boolean(c.isGroup),
           name: c.name,
           myStatus: c.myStatus,
-          members: members.filter((m) => m.conversationId === c.id).map(({ conversationId, ...m }) => m),
+          createdBy: c.createdBy,
+          mutedUntil: c.mutedUntil && c.mutedUntil > Date.now() ? c.mutedUntil : null,
+          members: members.filter((m) => m.conversationId === c.id)
+            .map(({ conversationId, deletedAt, ...m }) => ({ ...m, deleted: Boolean(deletedAt) })),
           lastMessage,
           unread: unread.find((u) => u.conversationId === c.id)?.n ?? 0,
           updatedAt: lastMessage?.createdAt ?? c.createdAt,
         };
       }).sort((a, b) => b.updatedAt - a.updatedAt);
     },
+
+    // ---------- groups ----------
+    renameGroup: (id, name) => query("UPDATE conversations SET name = ? WHERE id = ? AND is_group = 1", [name, id]),
+    groupAdmin: async (id) => (await one("SELECT created_by AS id FROM conversations WHERE id = ?", [id]))?.id ?? null,
+    // New people: contacts of whoever adds them join directly, others get a request.
+    async addMembers(id, byUserId, userIds) {
+      const contactIds = new Set((await store.contacts(byUserId)).map((u) => u.id));
+      const added = [];
+      for (const uid of userIds) {
+        const status = contactIds.has(uid) ? "accepted" : "pending";
+        const current = await store.memberStatus(id, uid);
+        if (current === "accepted" || current === "pending") continue;
+        if (current === "declined") await store.setMemberStatus(id, uid, status);
+        else await query("INSERT INTO conversation_members (conversation_id, user_id, joined_at, status) VALUES (?, ?, ?, ?)", [id, uid, Date.now(), status]);
+        added.push(uid);
+      }
+      return added;
+    },
+    // Leaving or being removed; the admin role passes to the longest-standing member.
+    async removeMember(id, userId) {
+      await query("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?", [id, userId]);
+      if ((await store.groupAdmin(id)) === userId) {
+        const next = await one(`SELECT user_id AS id FROM conversation_members WHERE conversation_id = ? AND status = 'accepted'
+                                ORDER BY joined_at, user_id LIMIT 1`, [id]);
+        await query("UPDATE conversations SET created_by = ? WHERE id = ?", [next?.id ?? null, id]);
+      }
+    },
+    memberCount: async (id) =>
+      (await one("SELECT count(*) AS n FROM conversation_members WHERE conversation_id = ? AND status <> 'declined'", [id]))?.n ?? 0,
+
+    // ---------- muting ----------
+    setMuted: (id, userId, until) =>
+      query("UPDATE conversation_members SET muted_until = ? WHERE conversation_id = ? AND user_id = ?", [until, id, userId]),
+    mutedIn: async (id) =>
+      (await query("SELECT user_id AS id FROM conversation_members WHERE conversation_id = ? AND muted_until > ?", [id, Date.now()]))
+        .map((r) => r.id),
+
+    // ---------- search ----------
+    // Text (and photo captions) in my accepted chats, newest first.
+    searchMessages: async (userId, q, limit = 40) => {
+      const pattern = `%${q.toLowerCase().replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+      const rows = await query(
+        `${MESSAGE_SELECT}
+         JOIN conversation_members me ON me.conversation_id = m.conversation_id AND me.user_id = ? AND me.status = 'accepted'
+         WHERE m.deleted_at IS NULL AND m.kind IN ('text', 'image') AND lower(m.text) LIKE ? ESCAPE '\\'
+         ORDER BY m.id DESC LIMIT ?`, [userId, pattern, limit]);
+      return rows.map(toMessage);
+    },
+
+    // ---------- deleting an account ----------
+    // Messages already sent stay with the people who received them, like on a
+    // phone; the account itself becomes "Account eliminato" and can't sign in.
+    async deleteAccount(userId) {
+      await query(`UPDATE users SET username = ?, password_hash = '!', deleted_at = ?, avatar_at = NULL,
+                   token_version = token_version + 1 WHERE id = ?`, [`Account eliminato ${userId}`, Date.now(), userId]);
+      await query("DELETE FROM avatars WHERE user_id = ?", [userId]);
+      await query("DELETE FROM push_subscriptions WHERE user_id = ?", [userId]);
+      await query("DELETE FROM reactions WHERE user_id = ?", [userId]);
+      await query("DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?", [userId, userId]);
+      await query("DELETE FROM invites WHERE created_by = ? AND used_by IS NULL", [userId]);
+      await query("DELETE FROM password_resets WHERE user_id = ? OR created_by = ?", [userId, userId]);
+      const groups = await query(`SELECT cm.conversation_id AS id FROM conversation_members cm
+                                  JOIN conversations c ON c.id = cm.conversation_id WHERE cm.user_id = ? AND c.is_group = 1`, [userId]);
+      for (const g of groups) await store.removeMember(g.id, userId);
+      return groups.map((g) => g.id);
+    },
+    isDeleted: async (userId) => Boolean((await one("SELECT deleted_at AS d FROM users WHERE id = ?", [userId]))?.d),
 
     memberStatus: async (conversationId, userId) =>
       (await one("SELECT status FROM conversation_members WHERE conversation_id = ? AND user_id = ?", [conversationId, userId]))?.status ?? null,
@@ -458,7 +536,7 @@ export async function createStore(driver) {
     setPassword: async (userId, hash) =>
       (await one("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ? RETURNING token_version AS v",
         [hash, userId]))?.v,
-    adminId: async () => (await one("SELECT min(id) AS id FROM users"))?.id ?? null,
+    adminId: async () => (await one("SELECT min(id) AS id FROM users WHERE deleted_at IS NULL"))?.id ?? null,
     inviterOf: async (userId) => (await one("SELECT created_by AS id FROM invites WHERE used_by = ?", [userId]))?.id ?? null,
     createPasswordReset: async (code, userId, createdBy, ttlMs) => {
       await query("DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL", [userId]);
